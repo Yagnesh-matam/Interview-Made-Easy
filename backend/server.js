@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 
-
 const aiRoutes = require('./routes/aiRoutes');
 const resumeRoutes = require('./routes/resumeRoutes');
 const dynamicQuestionRoutes = require('./routes/dynamicQuestionRoutes');
@@ -12,16 +11,19 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Configure CORS to whitelist specific origins
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS 
-    ? process.env.ALLOWED_ORIGINS.split(',') 
-    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000', 'http://localhost:5000'];
+const allowedOrigins = [
+  'https://interview-made-easy.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000'
+];
 
 const corsOptions = {
     origin: function (origin, callback) {
         // Allow requests without origin (like mobile apps or curl requests)
-        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+        if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
+            console.log(`CORS Blocked Origin: ${origin}`);
             callback(new Error('Not allowed by CORS'));
         }
     },
@@ -64,14 +66,13 @@ app.use('/api/dynamic-questions', dynamicQuestionRoutes);
 app.use('/api/ai', rateLimiter(60, 15 * 60 * 1000), aiRoutes); // 60 requests per 15 mins for chat
 app.use('/api/resume', rateLimiter(20, 15 * 60 * 1000), resumeRoutes); // 20 resume uploads/parses per 15 mins
 
-
 app.get('/', (req, res) => {
     res.send('Backend platform services functional.');
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-    console.error(err.message);
+    console.error("Server Error Hook:", err.message);
     // Don't expose internal error details
     res.status(err.status || 500).json({ 
         error: process.env.NODE_ENV === 'production' 
