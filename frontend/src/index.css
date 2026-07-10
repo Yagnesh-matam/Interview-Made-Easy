@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #FFFFFF;
+    --bg-secondary: #F8FAFC;
+    --text-main: #0F172A;
+    --accent-cyan: #0A9396;
+    --accent-gold: #CA8A04;
+    --border-subtle: #E2E8F0;
+  }
+
+  [data-theme='dark'] {
+    --bg-primary: #0A0F1D;
+    --bg-secondary: #131B2E;
+    --text-main: #E2E8F0;
+    --accent-cyan: #00F5D4;
+    --accent-gold: #ECC94B;
+    --border-subtle: #1E293B;
+  }
+
+  /* Completely locks down a premium, calm serif font family across the entire workspace */
+  html, body, #root, h1, h2, h3, h4, select, input, textarea, button, p, span, div, nav {
+    font-family: 'Lora', 'Merriweather', Georgia, serif !important;
+    letter-spacing: 0.01em !important;
+  }
+}
+
+.bg-appBg { background-color: var(--bg-primary) !important; }
+.bg-appCard { background-color: var(--bg-secondary) !important; }
+.text-appText { color: var(--text-main) !important; }
+.border-appBorder { border-color: var(--border-subtle) !important; }
+.bg-appCyan { background-color: var(--accent-cyan) !important; }

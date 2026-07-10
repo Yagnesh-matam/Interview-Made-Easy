@@ -1,0 +1,6 @@
+# Front-end Project Architecture Rules
+
+- Always make concise edits.
+- NEVER rewrite an entire component, file, or unchanged helper function unless explicitly requested. Only edit the exact block that is broken.
+- Use explicit inline code insertions over conversational chatting explanations.
+- If placeholders are used, ensure they match the surrounding platform design state.
