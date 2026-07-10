@@ -384,23 +384,6 @@ RETURN FORMAT (MUST be valid JSON):
     return [];
 };
 
-const syncUserStatToSupabase = async (key, val, user) => {
-    if (!user || !supabase) return;
-    try {
-        const metaKey = key === 'totalQuizzesTaken' ? 'quizzes_taken' :
-                        key === 'totalInterviewsDone' ? 'interviews_done' :
-                        key === 'totalQuestionsAnswered' ? 'questions_answered' :
-                        key === 'totalCorrectAnswers' ? 'correct_answers' : null;
-        if (metaKey) {
-            await supabase.auth.updateUser({
-                data: { [metaKey]: val }
-            });
-        }
-    } catch (err) {
-        console.error("Failed to sync user stat to Supabase:", err);
-    }
-};
-
 const App = () => {
     // === AUTHENTICATION & WALLET DATABASE STORAGE STATES ===
     const [user, setUser] = useState(null);
@@ -452,6 +435,25 @@ const App = () => {
             return { fullName: '', targetRole: 'Software Track', targetCompany: '', experienceLevel: 'Entry' };
         }
     });
+
+    const syncAllStatsToSupabase = async (updatedStats) => {
+        if (!user || !supabase) return;
+        try {
+            const { data, error } = await supabase.auth.updateUser({
+                data: {
+                    quizzes_taken: updatedStats.quizzes_taken ?? totalQuizzesTaken,
+                    interviews_done: updatedStats.interviews_done ?? totalInterviewsDone,
+                    questions_answered: updatedStats.questions_answered ?? totalQuestionsAnswered,
+                    correct_answers: updatedStats.correct_answers ?? totalCorrectAnswers
+                }
+            });
+            if (data?.user) {
+                setUser(data.user);
+            }
+        } catch (err) {
+            console.error("Failed to sync stats to Supabase:", err);
+        }
+    };
 
     const updateUserDetails = async (newDetails) => {
         setUserDetails(newDetails);
@@ -579,29 +581,35 @@ const App = () => {
     };
 
     useEffect(() => {
-        supabase.auth.getSession().then(({ data: { session } }) => {
+        supabase.auth.getSession().then(async ({ data: { session } }) => {
             if (session) {
-                setUser(session.user);
+                // Fetch fresh user from server to bypass local cached session JWT
+                const { data: { user: freshUser } } = await supabase.auth.getUser();
+                const activeUser = freshUser || session.user;
+                setUser(activeUser);
                 setIsGuest(false);
                 localStorage.removeItem('isGuest');
                 sessionStorage.removeItem('isGuest');
-                fetchUserCredits(session.user.id);
+                fetchUserCredits(activeUser.id);
             }
         });
 
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
             if (session) {
-                setUser(session.user);
+                // Fetch fresh user from server to bypass local cached session JWT
+                const { data: { user: freshUser } } = await supabase.auth.getUser();
+                const activeUser = freshUser || session.user;
+                setUser(activeUser);
                 setIsGuest(false);
                 localStorage.removeItem('isGuest');
                 sessionStorage.removeItem('isGuest');
-                fetchUserCredits(session.user.id);
+                fetchUserCredits(activeUser.id);
                 if (event === 'SIGNED_IN') {
-                    const isNewRegister = session.user?.user_metadata?.is_new_register === true ||
-                                          (session.user?.created_at && session.user?.last_sign_in_at && 
-                                           Math.abs(new Date(session.user.last_sign_in_at).getTime() - new Date(session.user.created_at).getTime()) < 15000);
-                    const onboardingCompleted = session.user?.user_metadata?.onboarding_completed === true;
-                    const localCompleted = localStorage.getItem(`onboarding_completed_${session.user.id}`) === 'true';
+                    const isNewRegister = activeUser.user_metadata?.is_new_register === true ||
+                                          (activeUser.created_at && activeUser.last_sign_in_at && 
+                                           Math.abs(new Date(activeUser.last_sign_in_at).getTime() - new Date(activeUser.created_at).getTime()) < 15000);
+                    const onboardingCompleted = activeUser.user_metadata?.onboarding_completed === true;
+                    const localCompleted = localStorage.getItem(`onboarding_completed_${activeUser.id}`) === 'true';
                     if (isNewRegister && !onboardingCompleted && !localCompleted && sessionStorage.getItem('onboarding_passed') !== 'true') {
                         setCurrentView('onboarding');
                     }
@@ -1488,7 +1496,6 @@ const App = () => {
                                         const newAns = prev + 1;
                                         const prefix = user ? `user_${user.id}` : 'guest';
                                         localStorage.setItem(`${prefix}_totalQuestionsAnswered`, newAns.toString());
-                                        syncUserStatToSupabase('totalQuestionsAnswered', newAns, user);
                                         return newAns;
                                     });
                                     if (isCorrect) {
@@ -1496,7 +1503,6 @@ const App = () => {
                                             const newCorr = prev + 1;
                                             const prefix = user ? `user_${user.id}` : 'guest';
                                             localStorage.setItem(`${prefix}_totalCorrectAnswers`, newCorr.toString());
-                                            syncUserStatToSupabase('totalCorrectAnswers', newCorr, user);
                                             return newCorr;
                                         });
                                     }
@@ -1506,13 +1512,19 @@ const App = () => {
                                         const newVal = prev + 1;
                                         const prefix = user ? `user_${user.id}` : 'guest';
                                         localStorage.setItem(`${prefix}_totalQuizzesTaken`, newVal.toString());
-                                        syncUserStatToSupabase('totalQuizzesTaken', newVal, user);
+                                        
+                                        // Sync all current stats to Supabase metadata at the end of the quiz
+                                        syncAllStatsToSupabase({
+                                            quizzes_taken: newVal,
+                                            questions_answered: parseInt(localStorage.getItem(`${prefix}_totalQuestionsAnswered`) || '0', 10),
+                                            correct_answers: parseInt(localStorage.getItem(`${prefix}_totalCorrectAnswers`) || '0', 10)
+                                        });
                                         return newVal;
                                     });
                                 }}
                             />
                         )}
-                        {currentView === 'interview' && <AiChatConsoleView theme={theme} voice={selectedVoice} setTotalInterviewsDone={setTotalInterviewsDone} user={user} />}
+                        {currentView === 'interview' && <AiChatConsoleView theme={theme} voice={selectedVoice} setTotalInterviewsDone={setTotalInterviewsDone} user={user} syncAllStatsToSupabase={syncAllStatsToSupabase} />}
                     </main>
 
                 </div>
@@ -6588,7 +6600,6 @@ const QuizView = ({ theme }) => {
             const newAns = prev + 1;
             const prefix = user ? `user_${user.id}` : 'guest';
             localStorage.setItem(`${prefix}_totalQuestionsAnswered`, newAns.toString());
-            syncUserStatToSupabase('totalQuestionsAnswered', newAns, user);
             return newAns;
         });
 
@@ -6597,7 +6608,6 @@ const QuizView = ({ theme }) => {
                 const newCorr = prev + 1;
                 const prefix = user ? `user_${user.id}` : 'guest';
                 localStorage.setItem(`${prefix}_totalCorrectAnswers`, newCorr.toString());
-                syncUserStatToSupabase('totalCorrectAnswers', newCorr, user);
                 return newCorr;
             });
         }
@@ -6614,7 +6624,13 @@ const QuizView = ({ theme }) => {
                 const newVal = prev + 1;
                 const prefix = user ? `user_${user.id}` : 'guest';
                 localStorage.setItem(`${prefix}_totalQuizzesTaken`, newVal.toString());
-                syncUserStatToSupabase('totalQuizzesTaken', newVal, user);
+                
+                // Sync all current stats to Supabase metadata at the end of the quiz
+                syncAllStatsToSupabase({
+                    quizzes_taken: newVal,
+                    questions_answered: parseInt(localStorage.getItem(`${prefix}_totalQuestionsAnswered`) || '0', 10),
+                    correct_answers: parseInt(localStorage.getItem(`${prefix}_totalCorrectAnswers`) || '0', 10)
+                });
                 return newVal;
             });
         }
@@ -6800,7 +6816,7 @@ const QuizView = ({ theme }) => {
 // ============================================================================
 // PART 5: AI CHAT CONSOLE VIEW
 // ============================================================================
-const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user }) => {
+const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAllStatsToSupabase }) => {
     const [mode, setMode] = useState(''); // 'company', 'resume'
     const [company, setCompany] = useState('');
     const [topic, setTopic] = useState('');
@@ -7562,7 +7578,9 @@ ${file.content}
             const newVal = prev + 1;
             const prefix = user ? `user_${user.id}` : 'guest';
             localStorage.setItem(`${prefix}_totalInterviewsDone`, newVal.toString());
-            syncUserStatToSupabase('totalInterviewsDone', newVal, user);
+            if (syncAllStatsToSupabase) {
+                syncAllStatsToSupabase({ interviews_done: newVal });
+            }
             return newVal;
         });
 
