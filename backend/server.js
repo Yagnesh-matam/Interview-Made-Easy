@@ -5,7 +5,6 @@ const dotenv = require('dotenv');
 
 const aiRoutes = require('./routes/aiRoutes');
 const resumeRoutes = require('./routes/resumeRoutes');
-const analyticsRoutes = require('./routes/analyticsRoutes');
 const dynamicQuestionRoutes = require('./routes/dynamicQuestionRoutes');
 
 dotenv.config();
@@ -64,7 +63,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use('/api/dynamic-questions', dynamicQuestionRoutes);
 app.use('/api/ai', rateLimiter(60, 15 * 60 * 1000), aiRoutes); // 60 requests per 15 mins for chat
 app.use('/api/resume', rateLimiter(20, 15 * 60 * 1000), resumeRoutes); // 20 resume uploads/parses per 15 mins
-app.use('/api/analytics', analyticsRoutes);
+
 
 app.get('/', (req, res) => {
     res.send('Backend platform services functional.');
