@@ -22,7 +22,8 @@ if (!supabase) {
             signUp: async () => ({ data: {}, error: new Error("Supabase is not configured.") }),
             signInWithPassword: async () => ({ data: {}, error: new Error("Supabase is not configured.") }),
             signInWithOAuth: async () => ({ error: new Error("Supabase is not configured.") }),
-            signOut: async () => ({ error: null })
+            signOut: async () => ({ error: null }),
+            updateUser: async () => ({ data: {}, error: null })
         },
         from: () => ({
             select: () => ({
@@ -415,6 +416,7 @@ const App = () => {
     const isLocked = !user && !isGuest;
     const effectiveView = isLocked ? 'home' : currentView;
     const [theme, setTheme] = useState('dark'); // 'dark' or 'light'
+    const [sidebarOpen, setSidebarOpen] = useState(false);
     const [scriptsLoaded, setScriptsLoaded] = useState({ three: false });
     
     const [showVoiceModal, setShowVoiceModal] = useState(false);
@@ -462,7 +464,13 @@ const App = () => {
                 setIsGuest(false);
                 localStorage.removeItem('isGuest');
                 sessionStorage.removeItem('isGuest');
-                setCurrentView('onboarding');
+                const userMetadataCompleted = data.user?.user_metadata?.onboarding_completed === true;
+                const localCompleted = localStorage.getItem(`onboarding_completed_${data.user.id}`) === 'true';
+                if (userMetadataCompleted || localCompleted) {
+                    setCurrentView('dashboard');
+                } else {
+                    setCurrentView('onboarding');
+                }
             }
         } catch (err) {
             alert(err.message || "Authentication verification dropped.");
@@ -549,8 +557,12 @@ const App = () => {
                 localStorage.removeItem('isGuest');
                 sessionStorage.removeItem('isGuest');
                 fetchUserCredits(session.user.id);
-                if (event === 'SIGNED_IN' && sessionStorage.getItem('onboarding_passed') !== 'true') {
-                    setCurrentView('onboarding');
+                if (event === 'SIGNED_IN') {
+                    const userMetadataCompleted = session.user?.user_metadata?.onboarding_completed === true;
+                    const localCompleted = localStorage.getItem(`onboarding_completed_${session.user.id}`) === 'true';
+                    if (!userMetadataCompleted && !localCompleted && sessionStorage.getItem('onboarding_passed') !== 'true') {
+                        setCurrentView('onboarding');
+                    }
                 }
             } else {
                 setUser(null);
@@ -1190,6 +1202,7 @@ const App = () => {
                     </div>
                     <OnboardingView 
                         theme={theme}
+                        user={user}
                         userDetails={userDetails}
                         updateUserDetails={updateUserDetails}
                         onComplete={() => setCurrentView('dashboard')}
@@ -1197,15 +1210,26 @@ const App = () => {
                 </div>
             ) : (
                 <div className="relative z-10 flex min-h-screen">
+                    {/* Responsive Overlay Backdrop */}
+                    {sidebarOpen && (
+                        <div 
+                            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden animate-fadeIn"
+                            onClick={() => setSidebarOpen(false)}
+                        />
+                    )}
                     
-                    <aside className={`w-64 border-r flex flex-col justify-between p-6 backdrop-blur-xl transition-all duration-500 ${
-                        theme === 'dark' 
-                            ? 'border-white/5 bg-slate-950/45' 
-                            : 'border-slate-200 bg-white/60'
-                    }`}>
+                    <aside className={`fixed inset-y-0 left-0 z-50 w-64 border-r flex flex-col justify-between p-6 backdrop-blur-xl transition-all duration-300 transform 
+                        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} 
+                        md:relative md:translate-x-0 
+                        ${
+                            theme === 'dark' 
+                                ? 'border-white/5 bg-slate-955/95 md:bg-slate-950/45 text-white' 
+                                : 'border-slate-200 bg-white md:bg-white/60 text-slate-800 shadow-sm shadow-slate-200/50'
+                        }
+                    `}>
                         <div className="space-y-8">
                             <div className="flex items-center justify-between">
-                                    <div className="flex items-center space-x-2.5 cursor-pointer" onClick={() => setCurrentView('home')}>
+                                    <div className="flex items-center space-x-2.5 cursor-pointer" onClick={() => { setCurrentView('home'); setSidebarOpen(false); }}>
                                     <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-500 flex items-center justify-center shadow-md shadow-cyan-500/25 text-white shrink-0 animate-pulse">
                                         <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                                             <path d="M12 2L2 7l10 5 10-5-10-5z" />
@@ -1219,6 +1243,15 @@ const App = () => {
                                         </h2>
                                     </div>
                                 </div>
+                                {/* Mobile Close Button */}
+                                <button 
+                                    onClick={() => setSidebarOpen(false)}
+                                    className="p-1 md:hidden text-slate-400 hover:text-white rounded-lg hover:bg-white/5"
+                                >
+                                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
                             </div>
 
                             <button 
@@ -1226,7 +1259,7 @@ const App = () => {
                                 className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-[11px] font-mono transition-all ${
                                     theme === 'dark' 
                                         ? 'border-white/5 bg-black/20 text-slate-350 hover:bg-white/5' 
-                                        : 'border-slate-200 bg-slate-100 text-slate-750 hover:bg-slate-200'
+                                        : 'border-slate-200 bg-slate-100 text-slate-750 hover:bg-slate-205'
                                 }`}
                             >
                                 <span>Theme Spectrum</span>
@@ -1235,7 +1268,7 @@ const App = () => {
 
                             <nav className="space-y-2 font-mono text-xs">
                                 <button 
-                                    onClick={() => setCurrentView('dashboard')}
+                                    onClick={() => { setCurrentView('dashboard'); setSidebarOpen(false); }}
                                     className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all text-left ${
                                         currentView === 'dashboard' 
                                             ? theme === 'dark' 
@@ -1248,7 +1281,7 @@ const App = () => {
                                     <span>Core Dashboard</span>
                                 </button>
                                 <button 
-                                    onClick={() => setCurrentView('study')}
+                                    onClick={() => { setCurrentView('study'); setSidebarOpen(false); }}
                                     className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all text-left ${
                                         currentView === 'study' 
                                             ? theme === 'dark' 
@@ -1261,7 +1294,7 @@ const App = () => {
                                     <span>Study Materials</span>
                                 </button>
                                 <button 
-                                    onClick={() => setCurrentView('quiz')}
+                                    onClick={() => { setCurrentView('quiz'); setSidebarOpen(false); }}
                                     className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all text-left ${
                                         currentView === 'quiz' 
                                             ? theme === 'dark' 
@@ -1274,7 +1307,7 @@ const App = () => {
                                     <span>Adaptive Quiz</span>
                                 </button>
                                 <button 
-                                    onClick={() => setCurrentView('interview')}
+                                    onClick={() => { setCurrentView('interview'); setSidebarOpen(false); }}
                                     className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all text-left ${
                                         currentView === 'interview' 
                                             ? theme === 'dark' 
@@ -1295,7 +1328,7 @@ const App = () => {
                                     <>
                                         <div className="flex justify-between items-center text-[10px]">
                                             <span className="text-slate-400 truncate max-w-[120px]">👤 {user.email}</span>
-                                            <button onClick={handleLogOut} className="text-rose-450 hover:text-rose-400 underline text-[9px] cursor-pointer">Sign Out</button>
+                                            <button onClick={() => { handleLogOut(); setSidebarOpen(false); }} className="text-rose-450 hover:text-rose-400 underline text-[9px] cursor-pointer">Sign Out</button>
                                         </div>
                                     </>
                                 ) : isGuest ? (
@@ -1308,11 +1341,11 @@ const App = () => {
                                 ) : null}
                             </div>
                             <button
-                                onClick={() => setShowVoiceModal(true)}
+                                onClick={() => { setShowVoiceModal(true); setSidebarOpen(false); }}
                                 className={`w-full flex items-center justify-center space-x-2 p-2.5 rounded-xl border text-[11px] font-mono transition-all ${
                                     theme === 'dark' 
                                         ? 'border-white/5 bg-black/20 text-slate-350 hover:bg-white/5' 
-                                        : 'border-slate-200 bg-slate-100 text-slate-750 hover:bg-slate-200'
+                                        : 'border-slate-200 bg-slate-100 text-slate-750 hover:bg-slate-205'
                                 }`}
                             >
                                 <span>⚙️</span>
@@ -1324,6 +1357,7 @@ const App = () => {
                                     localStorage.removeItem('isGuest');
                                     sessionStorage.removeItem('isGuest');
                                     setCurrentView('home');
+                                    setSidebarOpen(false);
                                 }} 
                                 className="w-full text-center text-[10px] font-mono text-slate-500 hover:text-white transition-colors"
                             >
@@ -1332,7 +1366,32 @@ const App = () => {
                         </div>
                     </aside>
 
-                     <main className="flex-1 p-10 overflow-y-auto max-h-screen">
+                     <main className="flex-1 p-4 md:p-10 overflow-y-auto max-h-screen relative">
+                        {/* Mobile Header Toggle */}
+                        <div className={`flex md:hidden items-center justify-between mb-6 p-3.5 rounded-2xl border backdrop-blur-xl ${
+                            theme === 'dark' 
+                                ? 'bg-slate-950/75 border-white/5 text-white' 
+                                : 'bg-white/95 border-slate-200 text-slate-800 shadow-sm'
+                        }`}>
+                            <div className="flex items-center space-x-2.5 cursor-pointer" onClick={() => setCurrentView('home')}>
+                                <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-500 flex items-center justify-center shadow-md shadow-cyan-500/25 text-white shrink-0">
+                                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                                        <path d="M2 17l10 5 10-5" />
+                                        <path d="M2 12l10 5 10-5" />
+                                    </svg>
+                                </div>
+                                <span className="font-black text-xs tracking-wider">Interview Made Easy</span>
+                            </div>
+                            <button 
+                                onClick={() => setSidebarOpen(true)}
+                                className={`p-2 rounded-xl transition-all ${theme === 'dark' ? 'text-slate-400 hover:text-white hover:bg-white/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'}`}
+                            >
+                                <svg className="w-5.5 h-5.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 6h16M4 12h16M4 18h16" />
+                                </svg>
+                            </button>
+                        </div>
                         {currentView === 'dashboard' && (
                             <DashboardView 
                                 onNavigate={setCurrentView} 
@@ -1721,7 +1780,7 @@ const HomeView = ({
                     </div>
                 </section>
             ) : (
-                <section className="relative z-10 h-screen flex flex-col justify-center items-center px-6 text-center">
+                <section className="relative z-10 min-h-screen flex flex-col justify-center items-center px-6 py-12 md:py-24 text-center">
                     <h1 className="max-w-5xl text-center leading-tight">
                         <span className={`text-6xl md:text-9xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-r ${theme === 'dark' ? 'from-white via-slate-100 to-appCyan' : 'from-slate-900 via-slate-800 to-blue-600'}`}>
                             Interview
@@ -1780,7 +1839,7 @@ const HomeView = ({
             )}
 
             {/* PART 2: THE TRAINING GROUNDS (Theory Stage - Gold Vibe) */}
-            <section className="relative z-10 h-screen flex flex-col justify-center px-10 md:px-24">
+            <section className="relative z-10 min-h-screen flex flex-col justify-center px-6 md:px-24 py-12 md:py-24">
                 <div className="max-w-3xl space-y-6">
                     <div className={`flex items-center space-x-2 text-[10px] font-mono tracking-widest uppercase text-appGold bg-appGold/5 w-fit px-3 py-1.5 rounded-full border border-appGold/20 ${theme === 'light' ? 'text-amber-600 bg-amber-500/5 border-amber-500/20' : ''}`}>
                         <span>📊 Step 02 // Training Grounds</span>
@@ -1810,7 +1869,7 @@ const HomeView = ({
             </section>
 
             {/* PART 3: PORTFOLIO DEFENSE MATRIX (Resume Stage - Purple Vibe) */}
-            <section className="relative z-10 h-screen flex flex-col justify-center items-end px-10 md:px-24">
+            <section className="relative z-10 min-h-screen flex flex-col justify-center items-end px-6 md:px-24 py-12 md:py-24">
                 <div className="max-w-3xl space-y-6 text-right flex flex-col items-end">
                     <div className={`flex items-center space-x-2 text-[10px] font-mono tracking-widest uppercase text-purple-400 bg-purple-500/5 w-fit px-3 py-1.5 rounded-full border border-purple-500/20 ${theme === 'light' ? 'text-purple-650 bg-purple-55 border-purple-200' : ''}`}>
                         <span>📄 Step 03 // Evaluation Arena</span>
@@ -1840,7 +1899,7 @@ const HomeView = ({
             </section>
 
             {/* PART 4: THE CONVERGENCE GATEWAY (Console Reveal - Emerald Vibe) */}
-            <section className="relative z-10 h-screen flex flex-col justify-center items-center px-6">
+            <section className="relative z-10 min-h-screen flex flex-col justify-center items-center px-6 py-12 md:py-24">
                 <div className={`w-full max-w-xl p-8 md:p-10 rounded-3xl text-center space-y-6 shadow-2xl relative overflow-hidden border transition-all duration-300 hover:shadow-[0_0_30px_rgba(16,185,129,0.1)] ${
                     theme === 'dark' 
                         ? 'bg-gradient-to-b from-[#101920] to-[#070a13] border-emerald-500/30 shadow-emerald-500/5' 
@@ -1902,14 +1961,14 @@ const HomeView = ({
 // ============================================================================
 // PART 1.5: PROFILE ONBOARDING VIEW
 // ============================================================================
-const OnboardingView = ({ theme, userDetails, updateUserDetails, onComplete }) => {
+const OnboardingView = ({ theme, user, userDetails, updateUserDetails, onComplete }) => {
     const [name, setName] = useState(userDetails.fullName || '');
     const [role, setRole] = useState(userDetails.targetRole || 'Software Track');
     const [experience, setExperience] = useState(userDetails.experienceLevel || 'Entry');
     const [company, setCompany] = useState(userDetails.targetCompany || '');
     const [error, setError] = useState('');
 
-    const handleSubmit = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
         if (!name.trim()) {
             setError('Name is compulsory.');
@@ -1930,12 +1989,34 @@ const OnboardingView = ({ theme, userDetails, updateUserDetails, onComplete }) =
             experienceLevel: experience,
             targetCompany: company
         });
+        const prefix = user ? `user_${user.id}` : 'guest';
+        localStorage.setItem(`onboarding_completed_${prefix}`, 'true');
         sessionStorage.setItem('onboarding_passed', 'true');
+        if (user && supabase) {
+            try {
+                await supabase.auth.updateUser({
+                    data: { onboarding_completed: true }
+                });
+            } catch (err) {
+                console.error("Failed to update user metadata in Supabase:", err);
+            }
+        }
         onComplete();
     };
 
-    const handleSkip = () => {
+    const handleSkip = async () => {
+        const prefix = user ? `user_${user.id}` : 'guest';
+        localStorage.setItem(`onboarding_completed_${prefix}`, 'true');
         sessionStorage.setItem('onboarding_passed', 'true');
+        if (user && supabase) {
+            try {
+                await supabase.auth.updateUser({
+                    data: { onboarding_completed: true }
+                });
+            } catch (err) {
+                console.error("Failed to update user metadata in Supabase:", err);
+            }
+        }
         onComplete();
     };
 
