@@ -384,6 +384,23 @@ RETURN FORMAT (MUST be valid JSON):
     return [];
 };
 
+const syncUserStatToSupabase = async (key, val, user) => {
+    if (!user || !supabase) return;
+    try {
+        const metaKey = key === 'totalQuizzesTaken' ? 'quizzes_taken' :
+                        key === 'totalInterviewsDone' ? 'interviews_done' :
+                        key === 'totalQuestionsAnswered' ? 'questions_answered' :
+                        key === 'totalCorrectAnswers' ? 'correct_answers' : null;
+        if (metaKey) {
+            await supabase.auth.updateUser({
+                data: { [metaKey]: val }
+            });
+        }
+    } catch (err) {
+        console.error("Failed to sync user stat to Supabase:", err);
+    }
+};
+
 const App = () => {
     // === AUTHENTICATION & WALLET DATABASE STORAGE STATES ===
     const [user, setUser] = useState(null);
@@ -436,10 +453,24 @@ const App = () => {
         }
     });
 
-    const updateUserDetails = (newDetails) => {
+    const updateUserDetails = async (newDetails) => {
         setUserDetails(newDetails);
         const prefix = user ? `user_${user.id}` : 'guest';
         localStorage.setItem(`${prefix}_userDetails`, JSON.stringify(newDetails));
+        if (user && supabase) {
+            try {
+                await supabase.auth.updateUser({
+                    data: {
+                        fullName: newDetails.fullName,
+                        targetRole: newDetails.targetRole,
+                        targetCompany: newDetails.targetCompany,
+                        experienceLevel: newDetails.experienceLevel
+                    }
+                });
+            } catch (err) {
+                console.error("Failed to update user details in Supabase:", err);
+            }
+        }
     };
 
     const handleEmailAuth = async (e) => {
@@ -586,16 +617,41 @@ const App = () => {
 
     useEffect(() => {
         const prefix = user ? `user_${user.id}` : 'guest';
-        setTotalQuizzesTaken(parseInt(localStorage.getItem(`${prefix}_totalQuizzesTaken`) || '0', 10));
-        setTotalInterviewsDone(parseInt(localStorage.getItem(`${prefix}_totalInterviewsDone`) || '0', 10));
-        setTotalQuestionsAnswered(parseInt(localStorage.getItem(`${prefix}_totalQuestionsAnswered`) || '0', 10));
-        setTotalCorrectAnswers(parseInt(localStorage.getItem(`${prefix}_totalCorrectAnswers`) || '0', 10));
-        
-        try {
-            const saved = localStorage.getItem(`${prefix}_userDetails`);
-            setUserDetails(saved ? JSON.parse(saved) : { fullName: '', targetRole: 'Software Track', targetCompany: '', experienceLevel: 'Entry' });
-        } catch {
-            setUserDetails({ fullName: '', targetRole: 'Software Track', targetCompany: '', experienceLevel: 'Entry' });
+        if (user) {
+            const meta = user.user_metadata || {};
+            setTotalQuizzesTaken(parseInt(meta.quizzes_taken ?? localStorage.getItem(`${prefix}_totalQuizzesTaken`) ?? '0', 10));
+            setTotalInterviewsDone(parseInt(meta.interviews_done ?? localStorage.getItem(`${prefix}_totalInterviewsDone`) ?? '0', 10));
+            setTotalQuestionsAnswered(parseInt(meta.questions_answered ?? localStorage.getItem(`${prefix}_totalQuestionsAnswered`) ?? '0', 10));
+            setTotalCorrectAnswers(parseInt(meta.correct_answers ?? localStorage.getItem(`${prefix}_totalCorrectAnswers`) ?? '0', 10));
+            
+            try {
+                const saved = localStorage.getItem(`${prefix}_userDetails`);
+                setUserDetails({
+                    fullName: meta.fullName ?? (saved ? JSON.parse(saved).fullName : ''),
+                    targetRole: meta.targetRole ?? (saved ? JSON.parse(saved).targetRole : 'Software Track'),
+                    targetCompany: meta.targetCompany ?? (saved ? JSON.parse(saved).targetCompany : ''),
+                    experienceLevel: meta.experienceLevel ?? (saved ? JSON.parse(saved).experienceLevel : 'Entry')
+                });
+            } catch {
+                setUserDetails({
+                    fullName: meta.fullName ?? '',
+                    targetRole: meta.targetRole ?? 'Software Track',
+                    targetCompany: meta.targetCompany ?? '',
+                    experienceLevel: meta.experienceLevel ?? 'Entry'
+                });
+            }
+        } else {
+            setTotalQuizzesTaken(parseInt(localStorage.getItem(`${prefix}_totalQuizzesTaken`) || '0', 10));
+            setTotalInterviewsDone(parseInt(localStorage.getItem(`${prefix}_totalInterviewsDone`) || '0', 10));
+            setTotalQuestionsAnswered(parseInt(localStorage.getItem(`${prefix}_totalQuestionsAnswered`) || '0', 10));
+            setTotalCorrectAnswers(parseInt(localStorage.getItem(`${prefix}_totalCorrectAnswers`) || '0', 10));
+            
+            try {
+                const saved = localStorage.getItem(`${prefix}_userDetails`);
+                setUserDetails(saved ? JSON.parse(saved) : { fullName: '', targetRole: 'Software Track', targetCompany: '', experienceLevel: 'Entry' });
+            } catch {
+                setUserDetails({ fullName: '', targetRole: 'Software Track', targetCompany: '', experienceLevel: 'Entry' });
+            }
         }
     }, [user]);
 
@@ -1432,6 +1488,7 @@ const App = () => {
                                         const newAns = prev + 1;
                                         const prefix = user ? `user_${user.id}` : 'guest';
                                         localStorage.setItem(`${prefix}_totalQuestionsAnswered`, newAns.toString());
+                                        syncUserStatToSupabase('totalQuestionsAnswered', newAns, user);
                                         return newAns;
                                     });
                                     if (isCorrect) {
@@ -1439,6 +1496,7 @@ const App = () => {
                                             const newCorr = prev + 1;
                                             const prefix = user ? `user_${user.id}` : 'guest';
                                             localStorage.setItem(`${prefix}_totalCorrectAnswers`, newCorr.toString());
+                                            syncUserStatToSupabase('totalCorrectAnswers', newCorr, user);
                                             return newCorr;
                                         });
                                     }
@@ -1448,6 +1506,7 @@ const App = () => {
                                         const newVal = prev + 1;
                                         const prefix = user ? `user_${user.id}` : 'guest';
                                         localStorage.setItem(`${prefix}_totalQuizzesTaken`, newVal.toString());
+                                        syncUserStatToSupabase('totalQuizzesTaken', newVal, user);
                                         return newVal;
                                     });
                                 }}
@@ -6529,6 +6588,7 @@ const QuizView = ({ theme }) => {
             const newAns = prev + 1;
             const prefix = user ? `user_${user.id}` : 'guest';
             localStorage.setItem(`${prefix}_totalQuestionsAnswered`, newAns.toString());
+            syncUserStatToSupabase('totalQuestionsAnswered', newAns, user);
             return newAns;
         });
 
@@ -6537,6 +6597,7 @@ const QuizView = ({ theme }) => {
                 const newCorr = prev + 1;
                 const prefix = user ? `user_${user.id}` : 'guest';
                 localStorage.setItem(`${prefix}_totalCorrectAnswers`, newCorr.toString());
+                syncUserStatToSupabase('totalCorrectAnswers', newCorr, user);
                 return newCorr;
             });
         }
@@ -6553,6 +6614,7 @@ const QuizView = ({ theme }) => {
                 const newVal = prev + 1;
                 const prefix = user ? `user_${user.id}` : 'guest';
                 localStorage.setItem(`${prefix}_totalQuizzesTaken`, newVal.toString());
+                syncUserStatToSupabase('totalQuizzesTaken', newVal, user);
                 return newVal;
             });
         }
@@ -7500,6 +7562,7 @@ ${file.content}
             const newVal = prev + 1;
             const prefix = user ? `user_${user.id}` : 'guest';
             localStorage.setItem(`${prefix}_totalInterviewsDone`, newVal.toString());
+            syncUserStatToSupabase('totalInterviewsDone', newVal, user);
             return newVal;
         });
 
