@@ -1408,7 +1408,7 @@ const App = () => {
                                 onClick={() => setSidebarOpen(true)}
                                 className={`p-2 rounded-xl transition-all ${theme === 'dark' ? 'text-slate-400 hover:text-white hover:bg-white/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'}`}
                             >
-                                <svg className="w-5.5 h-5.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 6h16M4 12h16M4 18h16" />
                                 </svg>
                             </button>
@@ -1672,8 +1672,8 @@ const HomeView = ({
                 <section className="relative z-10 min-h-screen flex flex-col justify-center items-center px-4 py-12 md:py-24">
                     <div className="max-w-5xl w-full grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12 items-center">
                         {/* Left Column: Branding and Hooks */}
-                        <div className="space-y-6 text-left">
-                            <h1 className="leading-tight">
+                        <div className="space-y-6 text-center md:text-left flex flex-col items-center md:items-start">
+                            <h1 className="leading-tight text-center md:text-left">
                                 <span className={`text-5xl md:text-7xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-r ${theme === 'dark' ? 'from-white via-slate-100 to-appCyan' : 'from-slate-900 via-slate-800 to-blue-600'}`}>
                                     Interview
                                 </span>
@@ -1686,18 +1686,18 @@ const HomeView = ({
                                     Made Easy
                                 </span>
                             </h1>
-                            <p className={`text-lg md:text-xl font-bold leading-relaxed ${theme === 'dark' ? 'text-slate-350' : 'text-slate-650'}`}>
+                            <p className={`text-lg md:text-xl font-bold leading-relaxed text-center md:text-left ${theme === 'dark' ? 'text-slate-350' : 'text-slate-650'}`}>
                                 From Resume to Offer Letter — Simplified. Stop guessing and start preparing with precision.
                             </p>
                             
-                            <div className="space-y-4 pt-4">
+                            <div className="space-y-4 pt-4 w-full max-w-md md:max-w-none flex flex-col items-center md:items-start">
                                 {[
                                     { icon: "🎙️", title: "Vocal AI Arena", desc: "Simulated MNC interviews with real-time neural voice feedback." },
                                     { icon: "🧠", title: "Adaptive Quizzes", desc: "Infinite customized tests that tune to your skill levels." },
                                     { icon: "📂", title: "Resume Auditing", desc: "Randomized project defense, hobbies, and experience checks." },
                                     { icon: "👔", title: "Etiquette Vault", desc: "HBS guides, STAR frameworks, and professional checklists." }
                                 ].map((feat, idx) => (
-                                    <div key={idx} className="flex gap-3">
+                                    <div key={idx} className="flex flex-col items-center text-center md:flex-row md:items-start md:text-left gap-3">
                                         <span className="text-xl shrink-0">{feat.icon}</span>
                                         <div>
                                             <h4 className={`text-xs font-black uppercase tracking-wider ${theme === 'dark' ? 'text-cyan-400' : 'text-blue-600'}`}>{feat.title}</h4>
