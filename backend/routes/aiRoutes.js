@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const Groq = require('groq-sdk');
 const { EdgeTTS } = require('edge-tts-universal');
-const Question = require('../models/Question');
 
 // Input validation helper
 const sanitizeInput = (input, maxLength = 500) => {
