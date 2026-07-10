@@ -451,6 +451,11 @@ const App = () => {
                 const { error } = await supabase.auth.signUp({
                     email: authForm.email,
                     password: authForm.password,
+                    options: {
+                        data: {
+                            is_new_register: true
+                        }
+                    }
                 });
                 if (error) throw error;
                 alert("Verification link sent! Check your inbox.");
@@ -464,12 +469,15 @@ const App = () => {
                 setIsGuest(false);
                 localStorage.removeItem('isGuest');
                 sessionStorage.removeItem('isGuest');
-                const userMetadataCompleted = data.user?.user_metadata?.onboarding_completed === true;
+                const isNewRegister = data.user?.user_metadata?.is_new_register === true ||
+                                      (data.user?.created_at && data.user?.last_sign_in_at && 
+                                       Math.abs(new Date(data.user.last_sign_in_at).getTime() - new Date(data.user.created_at).getTime()) < 15000);
+                const onboardingCompleted = data.user?.user_metadata?.onboarding_completed === true;
                 const localCompleted = localStorage.getItem(`onboarding_completed_${data.user.id}`) === 'true';
-                if (userMetadataCompleted || localCompleted) {
-                    setCurrentView('dashboard');
-                } else {
+                if (isNewRegister && !onboardingCompleted && !localCompleted) {
                     setCurrentView('onboarding');
+                } else {
+                    setCurrentView('dashboard');
                 }
             }
         } catch (err) {
@@ -558,9 +566,12 @@ const App = () => {
                 sessionStorage.removeItem('isGuest');
                 fetchUserCredits(session.user.id);
                 if (event === 'SIGNED_IN') {
-                    const userMetadataCompleted = session.user?.user_metadata?.onboarding_completed === true;
+                    const isNewRegister = session.user?.user_metadata?.is_new_register === true ||
+                                          (session.user?.created_at && session.user?.last_sign_in_at && 
+                                           Math.abs(new Date(session.user.last_sign_in_at).getTime() - new Date(session.user.created_at).getTime()) < 15000);
+                    const onboardingCompleted = session.user?.user_metadata?.onboarding_completed === true;
                     const localCompleted = localStorage.getItem(`onboarding_completed_${session.user.id}`) === 'true';
-                    if (!userMetadataCompleted && !localCompleted && sessionStorage.getItem('onboarding_passed') !== 'true') {
+                    if (isNewRegister && !onboardingCompleted && !localCompleted && sessionStorage.getItem('onboarding_passed') !== 'true') {
                         setCurrentView('onboarding');
                     }
                 }
@@ -726,6 +737,8 @@ const App = () => {
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
         camera.position.z = 15;
+        const isMobileDevice = window.innerWidth < 768;
+        const scaleFactor = isMobileDevice ? 0.6 : 1.0;
 
         const renderer = new THREE.WebGLRenderer({
             canvas: canvasRef.current,
@@ -756,40 +769,41 @@ const App = () => {
                 const v = Math.random();
                 const theta = u * 2.0 * Math.PI;
                 const phi = Math.acos(2.0 * v - 1.0);
-                const radius = 5 + Math.random() * 0.5;
+                const radius = (5 + Math.random() * 0.5) * scaleFactor;
                 sPositions[i3] = radius * Math.sin(phi) * Math.cos(theta);
                 sPositions[i3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
                 sPositions[i3 + 2] = radius * Math.cos(phi);
 
                 // Hollow Cube Shape (Theory Area)
                 const face = Math.floor(Math.random() * 6);
-                const a = (Math.random() - 0.5) * 8;
-                const b = (Math.random() - 0.5) * 8;
-                if (face === 0) { cPositions[i3] = 4; cPositions[i3+1] = a; cPositions[i3+2] = b; }
-                else if (face === 1) { cPositions[i3] = -4; cPositions[i3+1] = a; cPositions[i3+2] = b; }
-                else if (face === 2) { cPositions[i3] = a; cPositions[i3+1] = 4; cPositions[i3+2] = b; }
-                else if (face === 3) { cPositions[i3] = a; cPositions[i3+1] = -4; cPositions[i3+2] = b; }
-                else if (face === 4) { cPositions[i3] = a; cPositions[i3+1] = b; cPositions[i3+2] = 4; }
-                else { cPositions[i3] = a; cPositions[i3+1] = b; cPositions[i3+2] = -4; }
+                const a = (Math.random() - 0.5) * 8 * scaleFactor;
+                const b = (Math.random() - 0.5) * 8 * scaleFactor;
+                const halfSize = 4 * scaleFactor;
+                if (face === 0) { cPositions[i3] = halfSize; cPositions[i3+1] = a; cPositions[i3+2] = b; }
+                else if (face === 1) { cPositions[i3] = -halfSize; cPositions[i3+1] = a; cPositions[i3+2] = b; }
+                else if (face === 2) { cPositions[i3] = a; cPositions[i3+1] = halfSize; cPositions[i3+2] = b; }
+                else if (face === 3) { cPositions[i3] = a; cPositions[i3+1] = -halfSize; cPositions[i3+2] = b; }
+                else if (face === 4) { cPositions[i3] = a; cPositions[i3+1] = b; cPositions[i3+2] = halfSize; }
+                else { cPositions[i3] = a; cPositions[i3+1] = b; cPositions[i3+2] = -halfSize; }
 
                 // Wave Terrain (Resume Area)
-                wPositions[i3] = (Math.random() - 0.5) * 20;
-                wPositions[i3 + 1] = (Math.random() - 0.5) * 12;
-                wPositions[i3 + 2] = Math.sin(wPositions[i3] * 0.5) * Math.cos(wPositions[i3 + 1] * 0.5) * 1.5;
+                wPositions[i3] = (Math.random() - 0.5) * 20 * scaleFactor;
+                wPositions[i3 + 1] = (Math.random() - 0.5) * 12 * scaleFactor;
+                wPositions[i3 + 2] = Math.sin(wPositions[i3] * 0.5) * Math.cos(wPositions[i3 + 1] * 0.5) * 1.5 * scaleFactor;
 
                 // Singularity Vortex (Interview Console Area)
                 const angle = Math.random() * Math.PI * 2;
-                const dist = 0.5 + Math.random() * 8.0;
+                const dist = (0.5 + Math.random() * 8.0) * scaleFactor;
                 vPositions[i3] = Math.cos(angle) * dist;
                 vPositions[i3 + 1] = Math.sin(angle) * dist;
-                vPositions[i3 + 2] = (Math.random() - 0.5) * (10.0 / dist);
+                vPositions[i3 + 2] = (Math.random() - 0.5) * (10.0 / dist) * scaleFactor;
             } else {
                 // Ambient floater coordinates in outer margins
                 const angle = Math.random() * Math.PI * 2;
-                const radius = 8.5 + Math.random() * 12.0;
+                const radius = (8.5 + Math.random() * 12.0) * scaleFactor;
                 const x = Math.cos(angle) * radius;
                 const y = Math.sin(angle) * radius;
-                const z = (Math.random() - 0.5) * 8.0;
+                const z = (Math.random() - 0.5) * 8.0 * scaleFactor;
 
                 sPositions[i3] = cPositions[i3] = wPositions[i3] = vPositions[i3] = x;
                 sPositions[i3+1] = cPositions[i3+1] = wPositions[i3+1] = vPositions[i3+1] = y;
@@ -838,7 +852,7 @@ const App = () => {
 
         const texture = new THREE.CanvasTexture(particleCanvas);
         const material = new THREE.PointsMaterial({
-            size: theme === 'dark' ? 0.16 : 0.24, // Crisp, slightly smaller and sharper size in light mode
+            size: (theme === 'dark' ? 0.16 : 0.24) * scaleFactor, // Crisp, slightly smaller and sharper size in light mode, dynamically scaled for mobile
             vertexColors: true,
             transparent: true,
             blending: theme === 'dark' ? THREE.AdditiveBlending : THREE.NormalBlending,
@@ -877,24 +891,31 @@ const App = () => {
             }
         };
 
+        let lastTouchTime = 0;
         const onTouchStart = (e) => {
             if (e.touches && e.touches[0]) {
                 const touch = e.touches[0];
                 mouseRef.current.targetX = (touch.clientX / window.innerWidth) * 2 - 1;
                 mouseRef.current.targetY = -(touch.clientY / window.innerHeight) * 2 + 1;
 
-                const tempVector = new THREE.Vector3(mouseRef.current.targetX, mouseRef.current.targetY, 0.5);
-                tempVector.unproject(camera);
-                const dir = tempVector.sub(camera.position).normalize();
-                const distancePlane = -camera.position.z / dir.z;
-                const worldTouch = camera.position.clone().add(dir.multiplyScalar(distancePlane));
+                const currentTime = Date.now();
+                const timeDiff = currentTime - lastTouchTime;
+                lastTouchTime = currentTime;
 
-                mouseRef.current.waves.push({
-                    x: worldTouch.x,
-                    y: worldTouch.y,
-                    progress: 0.0,
-                    intensity: 1.2
-                });
+                if (timeDiff < 300) {
+                    const tempVector = new THREE.Vector3(mouseRef.current.targetX, mouseRef.current.targetY, 0.5);
+                    tempVector.unproject(camera);
+                    const dir = tempVector.sub(camera.position).normalize();
+                    const distancePlane = -camera.position.z / dir.z;
+                    const worldTouch = camera.position.clone().add(dir.multiplyScalar(distancePlane));
+
+                    mouseRef.current.waves.push({
+                        x: worldTouch.x,
+                        y: worldTouch.y,
+                        progress: 0.0,
+                        intensity: 1.2
+                    });
+                }
             }
         };
 
@@ -1213,18 +1234,18 @@ const App = () => {
                     {/* Responsive Overlay Backdrop */}
                     {sidebarOpen && (
                         <div 
-                            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden animate-fadeIn"
+                            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden animate-fadeIn"
                             onClick={() => setSidebarOpen(false)}
                         />
                     )}
                     
                     <aside className={`fixed inset-y-0 left-0 z-50 w-64 border-r flex flex-col justify-between p-6 backdrop-blur-xl transition-all duration-300 transform 
                         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} 
-                        md:relative md:translate-x-0 
+                        lg:relative lg:translate-x-0 
                         ${
                             theme === 'dark' 
-                                ? 'border-white/5 bg-slate-955/95 md:bg-slate-950/45 text-white' 
-                                : 'border-slate-200 bg-white md:bg-white/60 text-slate-800 shadow-sm shadow-slate-200/50'
+                                ? 'border-white/5 bg-slate-955/95 lg:bg-slate-950/45 text-white' 
+                                : 'border-slate-200 bg-white lg:bg-white/60 text-slate-800 shadow-sm shadow-slate-200/50'
                         }
                     `}>
                         <div className="space-y-8">
@@ -1246,7 +1267,7 @@ const App = () => {
                                 {/* Mobile Close Button */}
                                 <button 
                                     onClick={() => setSidebarOpen(false)}
-                                    className="p-1 md:hidden text-slate-400 hover:text-white rounded-lg hover:bg-white/5"
+                                    className="p-1 lg:hidden text-slate-400 hover:text-white rounded-lg hover:bg-white/5"
                                 >
                                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1366,9 +1387,9 @@ const App = () => {
                         </div>
                     </aside>
 
-                     <main className="flex-1 p-4 md:p-10 overflow-y-auto max-h-screen relative">
+                     <main className="flex-1 p-4 lg:p-10 overflow-y-auto max-h-screen relative">
                         {/* Mobile Header Toggle */}
-                        <div className={`flex md:hidden items-center justify-between mb-6 p-3.5 rounded-2xl border backdrop-blur-xl ${
+                        <div className={`flex lg:hidden items-center justify-between mb-6 p-3.5 rounded-2xl border backdrop-blur-xl ${
                             theme === 'dark' 
                                 ? 'bg-slate-950/75 border-white/5 text-white' 
                                 : 'bg-white/95 border-slate-200 text-slate-800 shadow-sm'
