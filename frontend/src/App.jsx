@@ -455,6 +455,66 @@ const App = () => {
         }
     };
 
+    const mergeGuestStatsToUser = async (sessionUser) => {
+        if (!sessionUser || !supabase) return;
+        
+        const guestQuizzes = parseInt(localStorage.getItem('guest_totalQuizzesTaken') || '0', 10);
+        const guestInterviews = parseInt(localStorage.getItem('guest_totalInterviewsDone') || '0', 10);
+        const guestQuestions = parseInt(localStorage.getItem('guest_totalQuestionsAnswered') || '0', 10);
+        const guestCorrect = parseInt(localStorage.getItem('guest_totalCorrectAnswers') || '0', 10);
+        
+        let guestDetails = null;
+        try {
+            const saved = localStorage.getItem('guest_userDetails');
+            if (saved) guestDetails = JSON.parse(saved);
+        } catch (e) {
+            console.error(e);
+        }
+        
+        if (guestQuizzes > 0 || guestInterviews > 0 || guestQuestions > 0 || guestCorrect > 0 || guestDetails) {
+            const meta = sessionUser.user_metadata || {};
+            const newQuizzes = (meta.quizzes_taken || 0) + guestQuizzes;
+            const newInterviews = (meta.interviews_done || 0) + guestInterviews;
+            const newQuestions = (meta.questions_answered || 0) + guestQuestions;
+            const newCorrect = (meta.correct_answers || 0) + guestCorrect;
+            
+            const newDetails = {
+                fullName: meta.fullName || guestDetails?.fullName || '',
+                targetRole: meta.targetRole || guestDetails?.targetRole || 'Software Track',
+                targetCompany: meta.targetCompany || guestDetails?.targetCompany || '',
+                experienceLevel: meta.experienceLevel || guestDetails?.experienceLevel || 'Entry'
+            };
+            
+            try {
+                const { data, error } = await supabase.auth.updateUser({
+                    data: {
+                        quizzes_taken: newQuizzes,
+                        interviews_done: newInterviews,
+                        questions_answered: newQuestions,
+                        correct_answers: newCorrect,
+                        fullName: newDetails.fullName,
+                        targetRole: newDetails.targetRole,
+                        targetCompany: newDetails.targetCompany,
+                        experienceLevel: newDetails.experienceLevel
+                    }
+                });
+                
+                if (!error) {
+                    localStorage.setItem('guest_totalQuizzesTaken', '0');
+                    localStorage.setItem('guest_totalInterviewsDone', '0');
+                    localStorage.setItem('guest_totalQuestionsAnswered', '0');
+                    localStorage.setItem('guest_totalCorrectAnswers', '0');
+                    localStorage.removeItem('guest_userDetails');
+                    if (data?.user) {
+                        setUser(data.user);
+                    }
+                }
+            } catch (err) {
+                console.error("Error merging guest stats:", err);
+            }
+        }
+    };
+
     const updateUserDetails = async (newDetails) => {
         setUserDetails(newDetails);
         const prefix = user ? `user_${user.id}` : 'guest';
@@ -591,6 +651,7 @@ const App = () => {
                 localStorage.removeItem('isGuest');
                 sessionStorage.removeItem('isGuest');
                 fetchUserCredits(activeUser.id);
+                await mergeGuestStatsToUser(activeUser);
             }
         });
 
@@ -604,6 +665,7 @@ const App = () => {
                 localStorage.removeItem('isGuest');
                 sessionStorage.removeItem('isGuest');
                 fetchUserCredits(activeUser.id);
+                await mergeGuestStatsToUser(activeUser);
                 if (event === 'SIGNED_IN') {
                     const isNewRegister = activeUser.user_metadata?.is_new_register === true ||
                                           (activeUser.created_at && activeUser.last_sign_in_at && 
@@ -1656,7 +1718,7 @@ const App = () => {
                                             value={userDetails.fullName}
                                             onChange={e => updateUserDetails({ ...userDetails, fullName: e.target.value })}
                                             placeholder="e.g. John Doe"
-                                            className="w-full bg-slate-900/60 dark:bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-800 dark:text-white"
+                                            className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-900 dark:text-white"
                                         />
                                     </div>
                                     <div>
@@ -1666,7 +1728,7 @@ const App = () => {
                                             value={userDetails.targetRole}
                                             onChange={e => updateUserDetails({ ...userDetails, targetRole: e.target.value })}
                                             placeholder="e.g. Frontend Engineer, Fullstack"
-                                            className="w-full bg-slate-900/60 dark:bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-800 dark:text-white"
+                                            className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-900 dark:text-white"
                                         />
                                     </div>
                                     <div>
@@ -1676,7 +1738,7 @@ const App = () => {
                                             value={userDetails.targetCompany}
                                             onChange={e => updateUserDetails({ ...userDetails, targetCompany: e.target.value })}
                                             placeholder="e.g. Google, Stripe"
-                                            className="w-full bg-slate-900/60 dark:bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-800 dark:text-white"
+                                            className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-900 dark:text-white"
                                         />
                                     </div>
                                     <div>
@@ -1684,7 +1746,7 @@ const App = () => {
                                         <select 
                                             value={userDetails.experienceLevel}
                                             onChange={e => updateUserDetails({ ...userDetails, experienceLevel: e.target.value })}
-                                            className="w-full bg-slate-900/60 dark:bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-800 dark:text-white"
+                                            className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-900 dark:text-white"
                                         >
                                             <option value="Entry">Entry (0-2 Yrs)</option>
                                             <option value="Mid">Mid Level (2-5 Yrs)</option>
@@ -2138,7 +2200,7 @@ const OnboardingView = ({ theme, user, userDetails, updateUserDetails, onComplet
                         value={name}
                         onChange={e => { setName(e.target.value); setError(''); }}
                         placeholder="e.g. John Doe"
-                        className="w-full bg-slate-900/60 dark:bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-800 dark:text-white"
+                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-900 dark:text-white"
                     />
                 </div>
 
@@ -2149,7 +2211,7 @@ const OnboardingView = ({ theme, user, userDetails, updateUserDetails, onComplet
                         value={role}
                         onChange={e => { setRole(e.target.value); setError(''); }}
                         placeholder="e.g. Software Track, Frontend Engineer"
-                        className="w-full bg-slate-900/60 dark:bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-800 dark:text-white"
+                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-900 dark:text-white"
                     />
                 </div>
 
@@ -2158,7 +2220,7 @@ const OnboardingView = ({ theme, user, userDetails, updateUserDetails, onComplet
                     <select 
                         value={experience}
                         onChange={e => { setExperience(e.target.value); setError(''); }}
-                        className="w-full bg-slate-900/60 dark:bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-800 dark:text-white"
+                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-900 dark:text-white"
                     >
                         <option value="Entry">Entry (0-2 Yrs)</option>
                         <option value="Mid">Mid Level (2-5 Yrs)</option>
@@ -2173,7 +2235,7 @@ const OnboardingView = ({ theme, user, userDetails, updateUserDetails, onComplet
                         value={company}
                         onChange={e => setCompany(e.target.value)}
                         placeholder="e.g. Google, Stripe"
-                        className="w-full bg-slate-900/60 dark:bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-800 dark:text-white"
+                        className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-cyan-500 transition-colors text-slate-900 dark:text-white"
                     />
                 </div>
 
