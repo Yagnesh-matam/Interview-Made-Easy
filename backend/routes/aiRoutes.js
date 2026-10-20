@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Groq = require('groq-sdk');
 const { EdgeTTS } = require('edge-tts-universal');
+const { getGroqModelId } = require('../lib/groqQuestionModel');
 
 // Input validation helper
 const sanitizeInput = (input, maxLength = 500) => {
@@ -66,7 +67,7 @@ router.post('/interview-chat', async (req, res) => {
 
         const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
         
-        let targetModel = 'llama-3.3-70b-versatile'; 
+        let targetModel = getGroqModelId();
         let systemPrompt = '';
         let temperature = 0.7;
 
@@ -305,7 +306,7 @@ Operational Phase Instructions:
             messages,
             model: targetModel,
             temperature,
-            max_tokens: 1200
+            max_completion_tokens: 1200
         });
 
         const replyText = completion.choices[0].message.content;

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import apiClient from '../config/apiClient';
 import { API_BASE_URL } from '../config/apiConfig';
 
 // Input sanitization helper
@@ -119,7 +120,7 @@ const AiChatConsole = () => {
         setUserInput('');
 
         try {
-            const response = await axios.post(`${API_BASE_URL}/api/ai/interview-chat`, {
+            const response = await apiClient.post('/api/ai/interview-chat', {
                 company: mode === 'company' ? company : '',
                 topic: mode === 'resume' ? parsedResumeText : topic,
                 chatHistory: updatedHistory,
@@ -194,7 +195,7 @@ const AiChatConsole = () => {
         formData.append('resume', file);
 
         try {
-            const response = await axios.post(`${API_BASE_URL}/api/resume/parse`, formData, {
+            const response = await apiClient.post('/api/resume/parse', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
             const extractedText = sanitizeUserInput(response.data.extractedText || '');
@@ -315,7 +316,7 @@ const AiChatConsole = () => {
 
         // Fetch vocalization for the kickstart message in the background
         try {
-            const response = await axios.post(`${API_BASE_URL}/api/ai/tts`, {
+            const response = await apiClient.post('/api/ai/tts', {
                 text: kickstartMessage
             });
             if (response.data.success && response.data.audio) {
