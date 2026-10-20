@@ -302,12 +302,15 @@ Operational Phase Instructions:
             ...validatedHistory
         ];
 
-        const completion = await groq.chat.completions.create({
-            messages,
-            model: targetModel,
-            temperature,
-            max_completion_tokens: 1200
-        });
+        const completion = await Promise.race([
+            groq.chat.completions.create({
+                messages,
+                model: targetModel,
+                temperature,
+                max_completion_tokens: 1200
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Groq request timeout')), 55000))
+        ]);
 
         const replyText = completion.choices[0].message.content;
         let base64Audio = null;
@@ -322,7 +325,10 @@ Operational Phase Instructions:
                 pitch: '+0Hz'
             });
 
-            const result = await tts.synthesize();
+            const result = await Promise.race([
+                tts.synthesize(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 15000))
+            ]);
             
             if (result && result.audio) {
                 const arrayBuffer = await result.audio.arrayBuffer();
@@ -363,7 +369,10 @@ router.post('/tts', async (req, res) => {
             pitch: '+0Hz'
         });
 
-        const result = await tts.synthesize();
+        const result = await Promise.race([
+            tts.synthesize(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 15000))
+        ]);
         let base64Audio = null;
         if (result && result.audio) {
             const arrayBuffer = await result.audio.arrayBuffer();
