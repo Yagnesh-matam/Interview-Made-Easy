@@ -325,15 +325,19 @@ Operational Phase Instructions:
                     pitch: '+0Hz'
                 });
 
+                const ttsStart = Date.now();
                 const result = await Promise.race([
                     tts.synthesize(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 8000))
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 12000))
                 ]);
                 
                 if (result && result.audio) {
                     const arrayBuffer = await result.audio.arrayBuffer();
                     const audioBuffer = Buffer.from(arrayBuffer);
-                    base64Audio = audioBuffer.toString('base64');
+                    if (audioBuffer.length > 0) {
+                        base64Audio = audioBuffer.toString('base64');
+                        console.error(`[tts] ok duration_ms=${Date.now() - ttsStart} bytes=${audioBuffer.length}`);
+                    }
                 }
             }
         } catch (ttsErr) {
