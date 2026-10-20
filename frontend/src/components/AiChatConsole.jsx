@@ -134,11 +134,23 @@ const AiChatConsole = () => {
 
             const replyText = response.data.reply;
             setChatHistory([...updatedHistory, { role: 'assistant', content: replyText }]);
-            playNeuralAudioStream(response.data.audio);
+            setLoading(false);
+            if (response.data.audio) {
+                playNeuralAudioStream(response.data.audio);
+            } else if (replyText) {
+                try {
+                    const ttsRes = await apiClient.post('/api/ai/tts', { text: replyText });
+                    if (ttsRes.data?.audio) {
+                        playNeuralAudioStream(ttsRes.data.audio);
+                    }
+                } catch (ttsErr) {
+                    console.error("TTS fetch failed");
+                    showNotification("Voice unavailable for this response.", "info");
+                }
+            }
         } catch (error) {
             console.error("Network transmission error");
             showNotification("Failed to get response from Zephyr. Please retry.", "error");
-        } finally {
             setLoading(false);
         }
     };

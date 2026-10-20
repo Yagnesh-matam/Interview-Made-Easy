@@ -309,7 +309,7 @@ Operational Phase Instructions:
                 temperature,
                 max_completion_tokens: 1200
             }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Groq request timeout')), 55000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Groq request timeout')), 30000))
         ]);
 
         const replyText = completion.choices[0].message.content;
@@ -317,23 +317,24 @@ Operational Phase Instructions:
         try {
             // Guarantee plainSpeechInput is a clean, non-empty, sanitized string
             let plainSpeechInput = sanitizeTextForTTS(replyText);
+            if (plainSpeechInput) {
+                // Initialize EdgeTTS with target voice and prosody parameters
+                const selectedVoice = req.body.voice || 'en-US-AvaNeural';
+                const tts = new EdgeTTS(plainSpeechInput, selectedVoice, {
+                    rate: '+1%',
+                    pitch: '+0Hz'
+                });
 
-            // Initialize EdgeTTS with target voice and prosody parameters
-            const selectedVoice = req.body.voice || 'en-US-AvaNeural';
-            const tts = new EdgeTTS(plainSpeechInput, selectedVoice, {
-                rate: '+1%',
-                pitch: '+0Hz'
-            });
-
-            const result = await Promise.race([
-                tts.synthesize(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 15000))
-            ]);
-            
-            if (result && result.audio) {
-                const arrayBuffer = await result.audio.arrayBuffer();
-                const audioBuffer = Buffer.from(arrayBuffer);
-                base64Audio = audioBuffer.toString('base64');
+                const result = await Promise.race([
+                    tts.synthesize(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 8000))
+                ]);
+                
+                if (result && result.audio) {
+                    const arrayBuffer = await result.audio.arrayBuffer();
+                    const audioBuffer = Buffer.from(arrayBuffer);
+                    base64Audio = audioBuffer.toString('base64');
+                }
             }
         } catch (ttsErr) {
             console.error("Edge-TTS synthesis error - continuing without audio");
@@ -371,7 +372,7 @@ router.post('/tts', async (req, res) => {
 
         const result = await Promise.race([
             tts.synthesize(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 15000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 8000))
         ]);
         let base64Audio = null;
         if (result && result.audio) {
