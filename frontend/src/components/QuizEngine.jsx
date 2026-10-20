@@ -1,8 +1,7 @@
 // QuizEngine.jsx (Fully Redesigned & Enhanced)
 
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import { API_BASE_URL } from '../config/apiConfig';
+import apiClient from '../config/apiClient';
 
 const getSubjectSpecificFeedback = (topic) => {
     switch (topic) {
@@ -84,7 +83,7 @@ const QuizEngine = ({ theme, onAnswerSelected, onQuizCompleted }) => {
 
         try {
             // Fetch first question
-            const response = await axios.post(`${API_BASE_URL}/api/dynamic-questions/adaptive-quiz`, {
+            const response = await apiClient.post('/api/dynamic-questions/adaptive-quiz', {
                 topic: selectedTopic,
                 difficulty: 'Easy',
                 previousQuestions: [],
@@ -100,7 +99,12 @@ const QuizEngine = ({ theme, onAnswerSelected, onQuizCompleted }) => {
             }
         } catch (err) {
             console.error(err);
-            setError('Failed to start quiz. Please verify your connection or key quotas and try again.');
+            if (err.response?.status === 401) {
+                setError('Please sign in with Google or email to use the AI quiz engine — questions are generated per-user.');
+            } else {
+                const startServerMessage = typeof err.response?.data?.error === 'string' ? err.response.data.error.trim() : '';
+                setError(startServerMessage || 'Failed to start quiz. Please check your connection and try again.');
+            }
             setQuizStarted(false);
         } finally {
             setLoading(false);
@@ -160,10 +164,16 @@ const QuizEngine = ({ theme, onAnswerSelected, onQuizCompleted }) => {
     // Load next question
     const loadNextQuestion = async () => {
         if (currentIndex + 1 >= 10) {
-            // Quiz complete
+            // Quiz complete — report a structured summary so the app can persist history
             setQuizCompleted(true);
             if (onQuizCompleted) {
-                onQuizCompleted();
+                onQuizCompleted({
+                    topic: selectedTopic,
+                    totalQuestions: 10,
+                    correctAnswers: correctCount,
+                    score: correctCount * 10,
+                    sessions: userSessions
+                });
             }
             return;
         }
@@ -176,7 +186,7 @@ const QuizEngine = ({ theme, onAnswerSelected, onQuizCompleted }) => {
                 ? (questions[currentIndex].difficulty === 'Easy' ? 'Medium' : 'Hard')
                 : (questions[currentIndex].difficulty === 'Hard' ? 'Medium' : 'Easy');
 
-            const response = await axios.post(`${API_BASE_URL}/api/dynamic-questions/adaptive-quiz`, {
+            const response = await apiClient.post('/api/dynamic-questions/adaptive-quiz', {
                 topic: selectedTopic,
                 difficulty: nextDiff,
                 previousQuestions: askedQuestions,
@@ -201,7 +211,12 @@ const QuizEngine = ({ theme, onAnswerSelected, onQuizCompleted }) => {
             }
         } catch (err) {
             console.error(err);
-            setError('Failed to load next question. Please click "Next Question" to retry.');
+            if (err.response?.status === 401) {
+                setError('Your session expired. Please sign in again to continue the quiz.');
+            } else {
+                const nextServerMessage = typeof err.response?.data?.error === 'string' ? err.response.data.error.trim() : '';
+                setError(nextServerMessage || 'Failed to load next question. Please click "Next Question" to retry.');
+            }
         } finally {
             setLoading(false);
         }

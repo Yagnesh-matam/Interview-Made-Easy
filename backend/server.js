@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 
+const { requireAuth } = require('./middleware/auth');
 const aiRoutes = require('./routes/aiRoutes');
 const resumeRoutes = require('./routes/resumeRoutes');
 const dynamicQuestionRoutes = require('./routes/dynamicQuestionRoutes');
@@ -10,12 +11,15 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Configure CORS to whitelist specific origins
-const allowedOrigins = [
+// CORS: whitelist origins from env, falling back to common local/dev origins.
+const defaultOrigins = [
   'https://interview-made-easy.vercel.app',
   'http://localhost:5173',
   'http://localhost:3000'
 ];
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean)
+  : defaultOrigins;
 
 const corsOptions = {
     origin: function (origin, callback) {
@@ -61,13 +65,20 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' })); // Limit JSON payload size
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// Mounted Endpoints (Decommitted old HeyGen avatar streaming paths)
-app.use('/api/dynamic-questions', dynamicQuestionRoutes);
-app.use('/api/ai', rateLimiter(60, 15 * 60 * 1000), aiRoutes); // 60 requests per 15 mins for chat
-app.use('/api/resume', rateLimiter(20, 15 * 60 * 1000), resumeRoutes); // 20 resume uploads/parses per 15 mins
+// All AI generation, resume parsing, and question endpoints require a verified
+// Supabase session. The verified user identity is attached to req.user; handlers
+// must never trust user IDs supplied by the client.
+app.use('/api/dynamic-questions', requireAuth, dynamicQuestionRoutes);
+app.use('/api/ai', requireAuth, rateLimiter(60, 15 * 60 * 1000), aiRoutes); // 60 requests per 15 mins for chat
+app.use('/api/resume', requireAuth, rateLimiter(20, 15 * 60 * 1000), resumeRoutes); // 20 resume uploads/parses per 15 mins
 
 app.get('/', (req, res) => {
     res.send('Backend platform services functional.');
+});
+
+// Lightweight liveness probe for orchestration/monitoring (no secrets, no auth needed)
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', uptime: Math.round(process.uptime()) });
 });
 
 // Error handling middleware
@@ -81,6 +92,11 @@ app.use((err, req, res, next) => {
     });
 });
 
-app.listen(PORT, () => {
-    console.log(`Server executing successfully on port ${PORT}`);
-});
+// Only bind a port when run directly (node server.js); tests import the app.
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`Server executing successfully on port ${PORT}`);
+    });
+}
+
+module.exports = app;

@@ -1,44 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
-
-let supabase = null;
-if (supabaseUrl && supabaseAnonKey) {
-    try {
-        supabase = createClient(supabaseUrl, supabaseAnonKey);
-    } catch (e) {
-        console.error("Failed to initialize Supabase client:", e);
-    }
-}
-
-if (!supabase) {
-    console.warn("Supabase credentials missing. Initializing mock auth services.");
-    supabase = {
-        auth: {
-            getSession: async () => ({ data: { session: null }, error: null }),
-            onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
-            signUp: async () => ({ data: {}, error: new Error("Supabase is not configured.") }),
-            signInWithPassword: async () => ({ data: {}, error: new Error("Supabase is not configured.") }),
-            signInWithOAuth: async () => ({ error: new Error("Supabase is not configured.") }),
-            signOut: async () => ({ error: null }),
-            updateUser: async () => ({ data: {}, error: null })
-        },
-        from: () => ({
-            select: () => ({
-                eq: () => ({
-                    single: async () => ({ data: null, error: new Error("Supabase is not configured.") })
-                })
-            })
-        })
-    };
-}
-import axios from 'axios';
+import supabase, { isSupabaseConfigured } from './config/supabaseClient';
+import apiClient, { setUnauthorizedHandler } from './config/apiClient';
 import QuizEngine from './components/QuizEngine';
-
-// Centralized API configuration
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
 // ============================================================================
 // SYSTEM DATA & BLUEPRINTS
@@ -148,248 +111,11 @@ const STUDY_DATABASE = [
     }
 ];
 
-// Helper to fetch dynamic AI questions directly from Gemini API with exponential backoff
-/**
- * DYNAMIC AI QUESTION GENERATION ENGINE
- * Generates infinite, unique questions via Gemini API (no database dependency)
- */
-
-const fetchDynamicAIQuestions = async (topicName, retries = 5, delay = 1000) => {
-    const apiKey = ""; // Runtime automatically provisions the key here
-    const model = "gemini-2.5-flash-preview-09-2025";
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    const systemPrompt = `
-You are an elite technical interviewer and adaptive quiz master.
-Generate exactly 10 COMPLETELY UNIQUE, HIGH-QUALITY, DIVERSE multiple-choice questions for: "${topicName}".
-
-CRITICAL REQUIREMENT: Each generation must produce COMPLETELY DIFFERENT questions from previous generations.
-
-MANDATORY QUESTION TYPE DISTRIBUTION:
-- 2x Core Theory & Foundational Concepts
-- 2x Code Debugging (Find the error/bug)
-- 2x Complete the Code (Fill blanks/syntax)
-- 2x Tricky Logic & Output Prediction
-- 2x Real-world Architecture & Scenarios
-
-RULES FOR EACH QUESTION:
-- 'q': Detailed question with code blocks if applicable (\`\`\`language code\`\`\`)
-- 'options': Exactly 4 DISTINCT plausible answers (no near-duplicates)
-- 'correct': 0-based index (0, 1, 2, or 3)
-- 'expl': 3-4 sentences explaining correctness, why others are wrong, key insight
-
-QUALITY STANDARDS:
-- Include edge cases and common misconceptions
-- Vary difficulty: 2 Easy, 5 Medium, 3 Hard
-- Each question tests different aspect of topic
-- No repetition from typical textbooks
-- Use realistic, practical scenarios
-- Make challenging but fair and solvable
-`;
-
-    const payload = {
-        contents: [{ parts: [{ text: systemPrompt }] }],
-        generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: "OBJECT",
-                properties: {
-                    questions: {
-                        type: "ARRAY",
-                        items: {
-                            type: "OBJECT",
-                            properties: {
-                                q: { type: "STRING" },
-                                options: { 
-                                    type: "ARRAY", 
-                                    items: { type: "STRING" },
-                                    minItems: 4,
-                                    maxItems: 4
-                                },
-                                correct: { type: "INTEGER" },
-                                expl: { type: "STRING" }
-                            },
-                            required: ["q", "options", "correct", "expl"]
-                        }
-                    }
-                },
-                required: ["questions"]
-            }
-        }
-    };
-
-    for (let attempt = 1; attempt <= retries; attempt++) {
-        try {
-            const response = await fetch(endpoint, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP Error Status: ${response.status}`);
-            }
-
-            const result = await response.json();
-            const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
-            const data = JSON.parse(textResponse);
-            
-            if (data && Array.isArray(data.questions) && data.questions.length > 0) {
-                return data.questions.slice(0, 10);
-            }
-            throw new Error("Invalid schema structure returned from AI model.");
-        } catch (error) {
-            if (attempt === retries) {
-                throw error; // Propagate the error upward after exhausting all retry channels
-            }
-            // Execute Exponential Backoff delay
-            await new Promise(resolve => setTimeout(resolve, delay));
-            delay *= 2; // Double delay duration sequentially: 1s, 2s, 4s, 8s, 16s
-        }
-    }
-};
-
-/**
- * TECHNICAL INTERVIEW QUESTIONS (Open-ended, in-depth)
- * For Vocal AI Arena - Technical Mode
- * Tests deep understanding, system design, debugging skills
- */
-const fetchDynamicTechnicalInterviewQuestions = async (topicName, companyName = "") => {
-    const apiKey = "";
-    const model = "gemini-2.5-flash-preview-09-2025";
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    const companyContext = companyName ? `You are interviewing for a position at ${companyName}.` : "You are in a general technical interview.";
-
-    const systemPrompt = `
-${companyContext} Generate exactly 5 unique, challenging TECHNICAL INTERVIEW QUESTIONS for topic: "${topicName}".
-
-QUESTION TYPES (Include all types):
-1. Deep Concept Explanation - "Explain X in detail, including edge cases and when to use it"
-2. System Design & Architecture - "How would you design/build/optimize X for production?"
-3. Code Debugging & Problem Solving - "Here's broken code. What's wrong? How would you fix and optimize it?"
-4. Real-world Scenario - "In production, you encounter X problem. Walk me through your debugging process."
-5. Trade-offs & Optimization - "Compare X vs Y. When use each? What are trade-offs?"
-
-REQUIREMENTS:
-- Each question is open-ended (requires 3-5 min thoughtful answer)
-- Tests depth of understanding, not memorization
-- Include potential follow-up areas to probe deeper
-- No simple yes/no answers - require justification
-- Use realistic, production-level scenarios
-
-RETURN FORMAT (MUST be valid JSON):
-{
-    "questions": [
-        {
-            "q": "Full detailed question text here (can include code blocks using triple backticks)",
-            "type": "Explanation|Design|Debugging|Scenario|TradeOffs",
-            "difficulty": "Intermediate|Advanced",
-            "followUp": "Suggested follow-up if answer incomplete",
-            "expectedDuration": "3-5 minutes"
-        }
-    ]
-}
-`;
-
-    const payload = {
-        contents: [{ parts: [{ text: systemPrompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
-    };
-
-    try {
-        const response = await fetch(endpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-                const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
-                return parsed.questions || [];
-            }
-        }
-    } catch (error) {
-        console.error("Technical interview generation error:", error);
-    }
-    return [];
-};
-
-/**
- * BEHAVIORAL & HR INTERVIEW QUESTIONS (Soft skills, teamwork, growth)
- * For Vocal AI Arena - Behavioral Mode
- * Tests communication, leadership, conflict resolution, adaptability
- */
-const fetchDynamicBehavioralInterviewQuestions = async () => {
-    const apiKey = "";
-    const model = "gemini-2.5-flash-preview-09-2025";
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    const systemPrompt = `
-You are an expert HR and behavioral interview conductor. Generate exactly 5 unique BEHAVIORAL INTERVIEW QUESTIONS.
-
-QUESTION CATEGORIES (Must include diverse mix):
-1. Leadership & Teamwork - "Tell me about a time when you led a team/project..."
-2. Conflict Resolution - "Describe a time you disagreed with a colleague/manager..."
-3. Problem-Solving & Adaptability - "Share an example of a challenging situation you overcame..."
-4. Communication & Presentation - "How do you explain complex technical ideas to..."
-5. Personal Growth & Learning - "Tell me about a failure or mistake that taught you..."
-
-BEHAVIORAL QUESTION GUIDELINES:
-- Questions require STORY-BASED answers (STAR method: Situation, Task, Action, Result)
-- Test soft skills: communication, resilience, creativity, collaboration, learning
-- Mix: Situational, Behavioral, Hypothetical approaches
-- Each naturally guides toward specific competencies
-- No simple yes/no questions
-- Open-ended, requiring self-reflection
-
-RETURN FORMAT (MUST be valid JSON):
-{
-    "questions": [
-        {
-            "q": "Full behavioral question (open-ended, story-driven)",
-            "category": "Category name",
-            "keyCompetencies": ["Listed", "Competencies", "Being", "Tested"],
-            "whatToLookFor": "What interviewers evaluate in the response (2-3 sentences)",
-            "timeAllowed": "2-3 minutes"
-        }
-    ]
-}
-`;
-
-    const payload = {
-        contents: [{ parts: [{ text: systemPrompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
-    };
-
-    try {
-        const response = await fetch(endpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-                const parsed = JSON.parse(data.candidates[0].content.parts[0].text);
-                return parsed.questions || [];
-            }
-        }
-    } catch (error) {
-        console.error("Behavioral interview generation error:", error);
-    }
-    return [];
-};
-
 const App = () => {
     // === AUTHENTICATION & WALLET DATABASE STORAGE STATES ===
     const [user, setUser] = useState(null);
     const [credits, setCredits] = useState(0);
     const [authForm, setAuthForm] = useState({ email: '', password: '', isSignUp: false });
-    const [loadingPayment, setLoadingPayment] = useState(false);
     const [isGuest, setIsGuest] = useState(false);
 
     // === DYNAMIC PERFORMANCE METRICS STATES ===
@@ -435,6 +161,59 @@ const App = () => {
             return { fullName: '', targetRole: 'Software Track', targetCompany: '', experienceLevel: 'Entry' };
         }
     });
+
+    // === DURABLE HISTORY PERSISTENCE (Supabase tables, RLS-scoped to auth.uid()) ===
+    const saveQuizSession = async (session) => {
+        if (!user || !isSupabaseConfigured) return; // guests / demo mode stay local-only
+        try {
+            const { error } = await supabase.from('quiz_sessions').insert({
+                user_id: user.id,
+                topic: session.topic,
+                total_questions: session.totalQuestions,
+                correct_answers: session.correctAnswers,
+                score: session.score
+            });
+            if (error) console.warn('Failed to save quiz session:', error.message);
+        } catch (err) {
+            console.warn('Failed to save quiz session:', err.message);
+        }
+    };
+
+    const saveInterviewSession = async (session) => {
+        if (!user || !isSupabaseConfigured) return;
+        try {
+            const { error } = await supabase.from('interview_sessions').insert({
+                user_id: user.id,
+                mode: session.mode,
+                company: session.company || null,
+                topic: session.topic || null,
+                turns: session.turns,
+                report: (session.report || '').substring(0, 20000)
+            });
+            if (error) console.warn('Failed to save interview session:', error.message);
+        } catch (err) {
+            console.warn('Failed to save interview session:', err.message);
+        }
+    };
+
+    // Global 401 handling: a signed-in user's session expired or was revoked.
+    // Sign out cleanly and return to the home/auth screen. Guests are left alone —
+    // individual views surface their own 'sign in to use AI features' errors.
+    const handleUnauthorized = useRef(() => {});
+    useEffect(() => {
+        handleUnauthorized.current = () => {
+            if (!user) return; // guests / already signed out — nothing to do
+            supabase.auth.signOut().catch(() => {});
+            setUser(null);
+            setCredits(0);
+            setIsGuest(false);
+            sessionStorage.removeItem('prepquest_view');
+            setCurrentView('home');
+            alert('Your session has expired. Please sign in again.');
+        };
+        setUnauthorizedHandler(() => handleUnauthorized.current());
+        return () => setUnauthorizedHandler(null);
+    }, [user]);
 
     const syncAllStatsToSupabase = async (updatedStats) => {
         if (!user || !supabase) return;
@@ -603,30 +382,6 @@ const App = () => {
         setCurrentView('home');
     };
 
-    const handlePurchaseCredits = async (creditAmount, priceValue) => {
-        if (!user) {
-            alert("Please log in to purchase credits.");
-            return;
-        }
-        
-        setLoadingPayment(true);
-        try {
-            const res = await axios.post(`${API_BASE_URL}/api/v1/payments/create-session`, {
-                userId: user.id,
-                creditsToBuy: creditAmount,
-                amount: priceValue
-            });
-            
-            if (res.data.checkoutUrl) {
-                window.location.href = res.data.checkoutUrl;
-            }
-        } catch (err) {
-            alert("Payment initialization timed out. Please try again.");
-        } finally {
-            setLoadingPayment(false);
-        }
-    };
-
     const fetchUserCredits = async (userId) => {
         try {
             const { data, error } = await supabase
@@ -735,7 +490,7 @@ const App = () => {
         setPreviewingVoice(voiceId);
         try {
             const previewText = `Hello, I am ${voiceName}. I will be conducting your Quest: Interview Prep session.`;
-            const response = await axios.post(`${API_BASE_URL}/api/ai/tts`, {
+            const response = await apiClient.post('/api/ai/tts', {
                 text: previewText,
                 voice: voiceId
             });
@@ -1466,6 +1221,19 @@ const App = () => {
                                     <span>🎙️</span>
                                     <span>Vocal AI Arena</span>
                                 </button>
+                                <button 
+                                    onClick={() => { setCurrentView('pricing'); setSidebarOpen(false); }}
+                                    className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all text-left ${
+                                        currentView === 'pricing' 
+                                            ? theme === 'dark' 
+                                                ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' 
+                                                : 'bg-blue-600/10 text-blue-600 border border-blue-600/20 font-bold'
+                                            : 'text-slate-400 hover:bg-white/5'
+                                    }`}
+                                >
+                                    <span>💎</span>
+                                    <span>Plans & Pricing</span>
+                                </button>
                             </nav>
                         </div>
 
@@ -1547,9 +1315,11 @@ const App = () => {
                                 totalInterviewsDone={totalInterviewsDone}
                                 accuracyRate={accuracyRate}
                                 userDetails={userDetails}
+                                user={user}
                             />
                         )}
                         {currentView === 'study' && <StudyView theme={theme} />}
+                        {currentView === 'pricing' && <PricingView theme={theme} isSignedIn={Boolean(user)} />}
                         {currentView === 'quiz' && (
                             <QuizEngine 
                                 theme={theme} 
@@ -1569,7 +1339,10 @@ const App = () => {
                                         });
                                     }
                                 }}
-                                onQuizCompleted={() => {
+                                onQuizCompleted={(sessionSummary) => {
+                                    if (sessionSummary) {
+                                        saveQuizSession(sessionSummary);
+                                    }
                                     setTotalQuizzesTaken(prev => {
                                         const newVal = prev + 1;
                                         const prefix = user ? `user_${user.id}` : 'guest';
@@ -1586,7 +1359,7 @@ const App = () => {
                                 }}
                             />
                         )}
-                        {currentView === 'interview' && <AiChatConsoleView theme={theme} voice={selectedVoice} setTotalInterviewsDone={setTotalInterviewsDone} user={user} syncAllStatsToSupabase={syncAllStatsToSupabase} />}
+                        {currentView === 'interview' && <AiChatConsoleView theme={theme} voice={selectedVoice} setTotalInterviewsDone={setTotalInterviewsDone} user={user} syncAllStatsToSupabase={syncAllStatsToSupabase} saveInterviewSession={saveInterviewSession} />}
                     </main>
 
                 </div>
@@ -2261,8 +2034,147 @@ const OnboardingView = ({ theme, user, userDetails, updateUserDetails, onComplet
 
 // ============================================================================
 // PART 2: DASHBOARD HUB OVERVIEW
-const DashboardView = ({ onNavigate, theme, totalQuizzesTaken, totalInterviewsDone, accuracyRate, userDetails }) => {
+// ============================================================================
+// PLANS & PRICING VIEW (informational — no payment processing is wired yet)
+// ============================================================================
+const PricingView = ({ theme, isSignedIn }) => {
+    const tiers = [
+        {
+            name: 'Free',
+            price: '$0',
+            period: 'forever',
+            highlight: false,
+            features: [
+                '5 AI quiz sessions per day',
+                '3 Vocal Arena interviews per day',
+                'Core study vault (12 topic tracks)',
+                'Resume parsing (PDF/DOCX)',
+                'Local progress tracking'
+            ],
+            cta: isSignedIn ? 'Current Plan' : 'Start Free',
+            disabled: true
+        },
+        {
+            name: 'Premium',
+            price: '$9',
+            period: '/month',
+            highlight: true,
+            features: [
+                'Unlimited AI quiz sessions',
+                'Unlimited Vocal Arena interviews',
+                'Company-specific interview modes (Google, Amazon, ...)',
+                'Deep resume portfolio defense audits',
+                'Cloud-synced history across all devices',
+                'Priority AI model access'
+            ],
+            cta: 'Payments Coming Soon',
+            disabled: true
+        }
+    ];
+
+    return (
+        <div className="space-y-8 animate-fadeIn text-left max-w-4xl mx-auto">
+            <div className="text-center">
+                <h1 className={`text-3xl font-black tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>Plans & Pricing</h1>
+                <p className={`text-sm mt-2 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
+                    Start free. Upgrade when you are ready for unlimited mock interviews.
+                </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {tiers.map((tier) => (
+                    <div 
+                        key={tier.name}
+                        className={`p-8 border rounded-3xl backdrop-blur-xl relative ${
+                            tier.highlight
+                                ? (theme === 'dark' ? 'bg-blue-500/5 border-blue-500/40 shadow-blue-500/10' : 'bg-blue-50 border-blue-300 shadow-md')
+                                : (theme === 'dark' ? 'bg-slate-950/45 border-white/5' : 'bg-white border-slate-200 shadow-sm')
+                        }`}
+                    >
+                        {tier.highlight && (
+                            <span className={`absolute -top-3 left-8 px-3 py-1 text-[10px] font-black uppercase tracking-widest rounded-full ${theme === 'dark' ? 'bg-blue-500 text-white' : 'bg-blue-600 text-white'}`}>
+                                Most Popular
+                            </span>
+                        )}
+                        <h3 className={`text-lg font-black ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>{tier.name}</h3>
+                        <div className="mt-2 flex items-baseline gap-1">
+                            <span className={`text-4xl font-black ${tier.highlight ? 'text-blue-500' : (theme === 'dark' ? 'text-white' : 'text-slate-800')}`}>{tier.price}</span>
+                            <span className={`text-xs ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>{tier.period}</span>
+                        </div>
+                        <ul className="mt-6 space-y-3">
+                            {tier.features.map((f, idx) => (
+                                <li key={idx} className={`flex items-start gap-2 text-xs ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}>
+                                    <span className={tier.highlight ? 'text-blue-500' : 'text-emerald-500'}>✔</span>
+                                    <span>{f}</span>
+                                </li>
+                            ))}
+                        </ul>
+                        <button 
+                            disabled={tier.disabled}
+                            className={`mt-8 w-full py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${
+                                tier.disabled
+                                    ? (theme === 'dark' ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-slate-200 text-slate-400 cursor-not-allowed')
+                                    : 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white cursor-pointer hover:opacity-90'
+                            }`}
+                        >
+                            {tier.cta}
+                        </button>
+                    </div>
+                ))}
+            </div>
+
+            <div className={`p-5 border rounded-2xl text-center ${theme === 'dark' ? 'bg-slate-950/45 border-white/5 text-slate-400' : 'bg-white border-slate-200 text-slate-500'}`}>
+                <p className="text-xs">
+                    💳 Online payments are not enabled yet. All core features are free during the beta — Premium limits will be lifted for everyone while we finish checkout integration.
+                </p>
+            </div>
+        </div>
+    );
+};
+
+const DashboardView = ({ onNavigate, theme, totalQuizzesTaken, totalInterviewsDone, accuracyRate, userDetails, user }) => {
     const [activeItem, setActiveItem] = useState(null);
+    const [quizHistory, setQuizHistory] = useState([]);
+    const [interviewHistory, setInterviewHistory] = useState([]);
+    const [historyLoading, setHistoryLoading] = useState(false);
+
+    // Load the signed-in user's durable history (RLS-scoped to auth.uid() on the server).
+    useEffect(() => {
+        let cancelled = false;
+        const loadHistory = async () => {
+            if (!user || !isSupabaseConfigured) return;
+            setHistoryLoading(true);
+            try {
+                const [quizzes, interviews] = await Promise.all([
+                    supabase.from('quiz_sessions')
+                        .select('id, topic, total_questions, correct_answers, score, created_at')
+                        .order('created_at', { ascending: false })
+                        .limit(5),
+                    supabase.from('interview_sessions')
+                        .select('id, mode, company, topic, turns, created_at')
+                        .order('created_at', { ascending: false })
+                        .limit(5)
+                ]);
+                if (cancelled) return;
+                if (!quizzes.error && quizzes.data) setQuizHistory(quizzes.data);
+                if (!interviews.error && interviews.data) setInterviewHistory(interviews.data);
+            } catch (err) {
+                console.warn('Failed to load history:', err.message);
+            } finally {
+                if (!cancelled) setHistoryLoading(false);
+            }
+        };
+        loadHistory();
+        return () => { cancelled = true; };
+    }, [user]);
+
+    const formatDate = (ts) => {
+        try {
+            return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        } catch {
+            return ts;
+        }
+    };
 
     return (
         <div className="space-y-8 animate-fadeIn text-left">
@@ -2326,6 +2238,52 @@ const DashboardView = ({ onNavigate, theme, totalQuizzesTaken, totalInterviewsDo
                     <button onClick={() => onNavigate('interview')} className={`mt-4 text-xs font-bold hover:underline cursor-pointer ${theme === 'dark' ? 'text-appCyan' : 'text-blue-600'}`}>Connect Microphone 🡢</button>
                 </div>
             </div>
+
+            {/* DURABLE CLOUD HISTORY (visible only for signed-in users with configured Supabase) */}
+            {user && isSupabaseConfigured && (
+                <div className="space-y-4 animate-item">
+                    <h2 className={`text-lg font-black tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-800'}`}>Recent Activity</h2>
+                    {historyLoading && (
+                        <div className={`p-6 border rounded-2xl text-center text-xs font-mono ${theme === 'dark' ? 'bg-slate-950/45 border-white/5 text-slate-400' : 'bg-white border-slate-200 text-slate-500'}`}>
+                            Syncing your cloud history...
+                        </div>
+                    )}
+                    {!historyLoading && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className={`p-5 border rounded-2xl ${theme === 'dark' ? 'bg-slate-950/45 border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
+                                <h3 className={`text-xs font-bold uppercase tracking-widest mb-3 ${theme === 'dark' ? 'text-purple-400' : 'text-purple-600'}`}>🧩 Quiz Sessions</h3>
+                                {quizHistory.length === 0 ? (
+                                    <p className={`text-xs ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>No quizzes yet. Complete one to start your log.</p>
+                                ) : (
+                                    <ul className="space-y-2">
+                                        {quizHistory.map(q => (
+                                            <li key={q.id} className={`flex justify-between items-center text-xs py-1.5 border-b last:border-0 ${theme === 'dark' ? 'border-white/5 text-slate-300' : 'border-slate-100 text-slate-600'}`}>
+                                                <span className="font-bold">{q.topic}</span>
+                                                <span className="font-mono">{q.correct_answers}/{q.total_questions} · {formatDate(q.created_at)}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                            <div className={`p-5 border rounded-2xl ${theme === 'dark' ? 'bg-slate-950/45 border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}>
+                                <h3 className={`text-xs font-bold uppercase tracking-widest mb-3 ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>🎙️ Interview Sessions</h3>
+                                {interviewHistory.length === 0 ? (
+                                    <p className={`text-xs ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>No interviews yet. Conclude a Vocal Arena session to log one.</p>
+                                ) : (
+                                    <ul className="space-y-2">
+                                        {interviewHistory.map(s => (
+                                            <li key={s.id} className={`flex justify-between items-center text-xs py-1.5 border-b last:border-0 ${theme === 'dark' ? 'border-white/5 text-slate-300' : 'border-slate-100 text-slate-600'}`}>
+                                                <span className="font-bold capitalize">{s.mode}{s.company ? ` · ${s.company}` : (s.topic ? ` · ${String(s.topic).substring(0, 20)}` : '')}</span>
+                                                <span className="font-mono">{s.turns} turns · {formatDate(s.created_at)}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 };
@@ -6629,7 +6587,7 @@ const QuizView = ({ theme }) => {
 
         try {
             // Call backend endpoint to generate 10 unique quiz questions via Gemini API
-            const response = await axios.post(`${API_BASE_URL}/api/dynamic-questions/generate-quiz`, {
+            const response = await apiClient.post('/api/dynamic-questions/generate-quiz', {
                 topic: topicName
             });
             
@@ -6878,7 +6836,7 @@ const QuizView = ({ theme }) => {
 // ============================================================================
 // PART 5: AI CHAT CONSOLE VIEW
 // ============================================================================
-const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAllStatsToSupabase }) => {
+const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAllStatsToSupabase, saveInterviewSession }) => {
     const [mode, setMode] = useState(''); // 'company', 'resume'
     const [company, setCompany] = useState('');
     const [topic, setTopic] = useState('');
@@ -6891,6 +6849,8 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
     const [userInput, setUserInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [isListening, setIsListening] = useState(false);
+    const [speechSupported, setSpeechSupported] = useState(true);
+    const [micError, setMicError] = useState('');
     const [dragActive, setDragActive] = useState(false);
     const [isPlayingAudio, setIsPlayingAudio] = useState(false);
     const [currentlyTypingIndex, setCurrentlyTypingIndex] = useState(-1);
@@ -7099,6 +7059,7 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
 
             rec.onstart = () => {
                 setIsListening(true);
+                setMicError('');
                 finalTranscript = '';
             };
             rec.onend = () => {
@@ -7109,6 +7070,17 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
                     } catch (e) {
                         console.error("Auto-restart mic failed:", e);
                     }
+                }
+            };
+            rec.onerror = (event) => {
+                // Surface actionable fallback guidance for unsupported browsers / denied permission.
+                if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+                    shouldListenRef.current = false;
+                    setMicError('Microphone access was denied. Allow mic permission in your browser settings, or type your answers below — typing works exactly the same.');
+                } else if (event.error === 'network') {
+                    setMicError('Speech recognition network error. Type your answers below instead.');
+                } else if (event.error === 'audio-capture') {
+                    setMicError('No microphone detected. Type your answers below instead.');
                 }
             };
             rec.onresult = (event) => {
@@ -7124,6 +7096,8 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
                 setUserInput(currentText);
             };
             recognitionRef.current = rec;
+        } else {
+            setSpeechSupported(false);
         }
 
         return () => {
@@ -7288,7 +7262,7 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
             formData.append('resume', file);
             try {
                 setLoading(true);
-                const response = await axios.post(`${API_BASE_URL}/api/resume/parse`, formData, {
+                const response = await apiClient.post('/api/resume/parse', formData, {
                     headers: { 'Content-Type': 'multipart/form-data' }
                 });
                 if (response.data && response.data.extractedText) {
@@ -7376,7 +7350,7 @@ PROJECTS:
                 formData.append('resume', file);
                 try {
                     setLoading(true);
-                    const response = await axios.post(`${API_BASE_URL}/api/resume/parse`, formData, {
+                    const response = await apiClient.post('/api/resume/parse', formData, {
                         headers: { 'Content-Type': 'multipart/form-data' }
                     });
                     if (response.data && response.data.extractedText) {
@@ -7467,7 +7441,7 @@ PROJECTS:
             setChatHistory([{ role: 'assistant', content: kickstartText }]);
             
             try {
-                const ttsRes = await axios.post(`${API_BASE_URL}/api/ai/tts`, { text: kickstartText, voice: voice });
+                const ttsRes = await apiClient.post('/api/ai/tts', { text: kickstartText, voice: voice });
                 startTypingEffect(0, kickstartText, ttsRes.data.audio);
             } catch (err) {
                 console.error("Kickstart voice synthesis failed:", err);
@@ -7483,7 +7457,7 @@ PROJECTS:
             setChatHistory([{ role: 'assistant', content: kickstartText }]);
 
             try {
-                const ttsRes = await axios.post(`${API_BASE_URL}/api/ai/tts`, { text: kickstartText, voice: voice });
+                const ttsRes = await apiClient.post('/api/ai/tts', { text: kickstartText, voice: voice });
                 startTypingEffect(0, kickstartText, ttsRes.data.audio);
             } catch (err) {
                 console.error("Kickstart voice synthesis failed:", err);
@@ -7529,7 +7503,7 @@ Core Directives for the AI Interviewer:
             setChatHistory(initialPrompt);
 
             try {
-                const res = await axios.post(`${API_BASE_URL}/api/ai/interview-chat`, {
+                const res = await apiClient.post('/api/ai/interview-chat', {
                     company: '',
                     topic: resumeText + "\n" + dynamicContext,
                     chatHistory: initialPrompt,
@@ -7606,7 +7580,7 @@ ${file.content}
         setUserInput('');
 
         try {
-            const res = await axios.post(`${API_BASE_URL}/api/ai/interview-chat`, {
+            const res = await apiClient.post('/api/ai/interview-chat', {
                 company: mode === 'company' ? company : '',
                 topic: mode === 'resume' ? resumeText : topic,
                 chatHistory: updatedHistory,
@@ -7626,6 +7600,9 @@ ${file.content}
             startTypingEffect(newHistory.length - 1, res.data.reply, res.data.audio);
         } catch (err) {
             console.error("Transmission failed:", err);
+            if (err.response?.status === 401) {
+                setUserInput('⚠️ Your session expired or you are not signed in. Sign in with Google or email to use the Vocal AI Arena.');
+            }
         } finally {
             setLoading(false);
         }
@@ -7649,6 +7626,7 @@ ${file.content}
         setGeneratingReport(true);
         setShowReport(true);
 
+        let finalReport = '';
         try {
             // Append system message to chat history to force immediate evaluation
             const finalSystemMessage = { 
@@ -7657,7 +7635,7 @@ ${file.content}
             };
             const updatedHistory = [...chatHistory, finalSystemMessage];
 
-            const res = await axios.post(`${API_BASE_URL}/api/ai/interview-chat`, {
+            const res = await apiClient.post('/api/ai/interview-chat', {
                 company: mode === 'company' ? company : '',
                 topic: mode === 'resume' ? resumeText : topic,
                 chatHistory: updatedHistory,
@@ -7671,6 +7649,7 @@ ${file.content}
             });
 
             if (res.data && res.data.reply) {
+                finalReport = res.data.reply;
                 setReportContent(res.data.reply);
             } else {
                 throw new Error("Invalid reply format");
@@ -7689,7 +7668,7 @@ ${file.content}
             let skillFeedback = "Technical accuracy shows promise. Ensure you detail edge cases and system design trade-offs.";
             if (turns >= 3) skillFeedback = "Strong technical coverage. You successfully navigated intermediate follow-up questions.";
 
-            setReportContent(`
+            finalReport = `
 # INTERVIEW FEEDBACK & DIAGNOSTIC REPORT
 
 ### 📊 Performance Summary
@@ -7701,14 +7680,28 @@ ${file.content}
 1. **STAR Method**: Ensure every behavioral response contains a clear Situation, Task, Action, and Result.
 2. **System Design**: Practice detailing architectural tradeoffs (e.g. read/write speeds, memory consumption).
 3. **Study Materials**: Review the relevant study guides in the **Study Portal** for technical core topics.
-            `);
+            `;
+            setReportContent(finalReport);
         } finally {
             setGeneratingReport(false);
+            // Persist the completed session + feedback to the user's private history
+            if (saveInterviewSession) {
+                saveInterviewSession({
+                    mode: mode || 'concept',
+                    company: mode === 'company' ? company : null,
+                    topic: mode === 'resume' ? (resumeFileName || 'Resume Defense') : topic,
+                    turns: chatHistory.filter(m => m.role === 'user').length,
+                    report: finalReport
+                });
+            }
         }
     };
 
     const toggleVoice = () => {
-        if (!recognitionRef.current) return;
+        if (!recognitionRef.current || !speechSupported) {
+            setMicError('Voice input is not supported in this browser (try Chrome or Edge). Type your answers below — the interview works identically.');
+            return;
+        }
         primeAudio();
         if (isListening) {
             shouldListenRef.current = false;
@@ -8146,12 +8139,19 @@ ${file.content}
                     </div>
                 )}
 
+                {micError && (
+                    <div className="mb-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-[11px] text-amber-500 flex justify-between items-center gap-3 animate-fadeIn">
+                        <span>⚠️ {micError}</span>
+                        <button type="button" onClick={() => setMicError('')} className="font-bold shrink-0">✕</button>
+                    </div>
+                )}
                 <div className="flex gap-3 items-center border-t border-white/5 pt-4">
                     <button 
                         onClick={toggleVoice} 
-                        className={`p-3 rounded-xl border text-sm cursor-pointer transition-all duration-200 ${isListening ? 'bg-rose-500 border-rose-500 text-white animate-pulse' : 'bg-black border-white/5 text-slate-400 hover:text-slate-200'}`}
+                        title={speechSupported ? 'Toggle voice input' : 'Voice input unavailable in this browser — type instead'}
+                        className={`p-3 rounded-xl border text-sm transition-all duration-200 ${!speechSupported ? 'bg-black border-white/5 text-slate-600 cursor-not-allowed' : (isListening ? 'bg-rose-500 border-rose-500 text-white animate-pulse cursor-pointer' : 'bg-black border-white/5 text-slate-400 hover:text-slate-200 cursor-pointer')}`}
                     >
-                        {isListening ? '🛑' : '🎙️'}
+                        {isListening ? '🛑' : (speechSupported ? '🎙️' : '⌨️')}
                     </button>
                     <textarea 
                         rows={1}

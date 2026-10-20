@@ -2,6 +2,13 @@ const Groq = require('groq-sdk');
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
+const {
+    getGroqModelId,
+    buildQuizCompletionParams,
+    extractJsonText,
+    classifyProviderError,
+    InvalidModelResponseError
+} = require('../lib/groqQuestionModel');
 
 // Input validation helper
 const sanitizeInput = (input) => {
@@ -297,8 +304,6 @@ RETURN FORMAT (MUST be valid JSON):
     }
 });
 
-module.exports = router;
-
 // @route   POST /api/dynamic-questions/adaptive-quiz
 // @desc    Generate a single adaptive question using Groq, based on difficulty and previous questions
 router.post('/adaptive-quiz', async (req, res) => {
@@ -321,7 +326,9 @@ router.post('/adaptive-quiz', async (req, res) => {
             return res.status(500).json({ error: "Server configuration error." });
         }
 
-        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+        // Fail fast instead of hanging the quiz UI: 20s per attempt, one retry
+        // (worst case stays well under the frontend's 60s request timeout).
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY, timeout: 20000, maxRetries: 1 });
 
         // Calculate the least represented question type to balance the quiz types
         const types = ['Theory', 'Code Debugging', 'Complete Code', 'Logic/Output', 'Architecture/Scenario'];
@@ -387,21 +394,27 @@ Return only valid JSON in this format:
             { role: 'user', content: `Generate a ${currentDifficulty} difficulty ${selectedType} question on ${cleanTopic}.` }
         ];
 
-        const completion = await groq.chat.completions.create({
-            messages,
-            model: 'llama-3.3-70b-versatile',
-            temperature: 0.8,
-            max_tokens: 1000,
-            response_format: { type: "json_object" }
-        });
+        const modelId = getGroqModelId();
+        const completion = await groq.chat.completions.create(
+            buildQuizCompletionParams({ modelId, messages })
+        );
 
-        const replyText = completion.choices[0].message.content;
-        const questionData = JSON.parse(replyText);
+        const replyText = extractJsonText(completion.choices[0]?.message?.content);
+        if (!replyText) {
+            throw new InvalidModelResponseError('empty content');
+        }
+
+        let questionData;
+        try {
+            questionData = JSON.parse(replyText);
+        } catch (parseError) {
+            throw new InvalidModelResponseError(`malformed JSON: ${parseError.message}`);
+        }
 
         // Validate structure
         if (!questionData.q || !Array.isArray(questionData.options) || questionData.options.length !== 4 ||
             typeof questionData.correct !== 'number' || !questionData.expl || !questionData.tip) {
-            throw new Error('Invalid question format from Groq');
+            throw new InvalidModelResponseError('missing or malformed required fields');
         }
 
         res.json({
@@ -418,7 +431,11 @@ Return only valid JSON in this format:
         });
 
     } catch (error) {
-        console.error("Adaptive quiz error:", error.message);
-        res.status(500).json({ error: "Failed to generate question.", details: error.message });
+        // Never echo raw provider errors or credentials back to the client.
+        const { httpStatus, publicMessage, logMessage } = classifyProviderError(error);
+        console.error(logMessage);
+        res.status(httpStatus).json({ error: publicMessage });
     }
 });
+
+module.exports = router;
