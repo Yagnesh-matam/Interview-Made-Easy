@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Groq = require('groq-sdk');
-const { EdgeTTS } = require('edge-tts-universal');
+const { synthesizeToBase64 } = require('../lib/edgeTtsClient');
 const { getGroqModelId } = require('../lib/groqQuestionModel');
 
 // Input validation helper
@@ -315,34 +315,20 @@ Operational Phase Instructions:
         const replyText = completion.choices[0].message.content;
         let base64Audio = null;
         try {
-            // Guarantee plainSpeechInput is a clean, non-empty, sanitized string
-            let plainSpeechInput = sanitizeTextForTTS(replyText);
-            if (plainSpeechInput) {
-                // Initialize EdgeTTS with target voice and prosody parameters
-                const selectedVoice = req.body.voice || 'en-US-AvaNeural';
-                const tts = new EdgeTTS(plainSpeechInput, selectedVoice, {
-                    rate: '+1%',
-                    pitch: '+0Hz'
-                });
-
-                const ttsStart = Date.now();
-                const result = await Promise.race([
-                    tts.synthesize(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 12000))
-                ]);
-                
-                if (result && result.audio) {
-                    const arrayBuffer = await result.audio.arrayBuffer();
-                    const audioBuffer = Buffer.from(arrayBuffer);
-                    if (audioBuffer.length > 0) {
-                        base64Audio = audioBuffer.toString('base64');
-                        console.error(`[tts] ok duration_ms=${Date.now() - ttsStart} bytes=${audioBuffer.length}`);
-                    }
-                }
-            }
+            const plainSpeechInput = sanitizeTextForTTS(replyText);
+            const selectedVoice = req.body.voice || 'en-US-AvaNeural';
+            const ttsStart = Date.now();
+            const synthesized = await synthesizeToBase64(plainSpeechInput, {
+                voice: selectedVoice,
+                rate: '+1%',
+                pitch: '+0Hz',
+                timeoutMs: 12000
+            });
+            base64Audio = synthesized.audio;
+            console.error(`[tts:interview-chat] ok duration_ms=${Date.now() - ttsStart} bytes=${synthesized.bytes} mime=${synthesized.mimeType}`);
         } catch (ttsErr) {
-            console.error("Edge-TTS synthesis error - continuing without audio");
-            // Continue without audio, don't fail the entire request
+            // Never fail the text reply because speech synthesis failed.
+            console.error(`[tts:interview-chat] code=${ttsErr.code || 'UNKNOWN'} err=${ttsErr.message}`);
         }
 
         res.json({ 
@@ -369,26 +355,18 @@ router.post('/tts', async (req, res) => {
         const plainSpeechInput = sanitizeTextForTTS(text);
 
         const targetVoice = voice || 'en-US-AvaNeural';
-        const tts = new EdgeTTS(plainSpeechInput, targetVoice, {
+        const ttsStart = Date.now();
+        const synthesized = await synthesizeToBase64(plainSpeechInput, {
+            voice: targetVoice,
             rate: '+1%',
-            pitch: '+0Hz'
+            pitch: '+0Hz',
+            timeoutMs: 12000
         });
-
-        const result = await Promise.race([
-            tts.synthesize(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('TTS timeout')), 8000))
-        ]);
-        let base64Audio = null;
-        if (result && result.audio) {
-            const arrayBuffer = await result.audio.arrayBuffer();
-            const audioBuffer = Buffer.from(arrayBuffer);
-            base64Audio = audioBuffer.toString('base64');
-        }
-
-        res.json({ success: true, audio: base64Audio });
+        console.error(`[tts:standalone] ok duration_ms=${Date.now() - ttsStart} bytes=${synthesized.bytes} mime=${synthesized.mimeType}`);
+        res.json({ success: true, audio: synthesized.audio, mimeType: synthesized.mimeType });
     } catch (error) {
-        console.error("TTS synthesis endpoint error:", error.message);
-        res.status(500).json({ error: "Failed to synthesize speech." });
+        console.error(`[tts:standalone] code=${error.code || 'UNKNOWN'} err=${error.message}`);
+        res.status(503).json({ error: "Speech synthesis is temporarily unavailable. Text chat is unaffected." });
     }
 });
 
