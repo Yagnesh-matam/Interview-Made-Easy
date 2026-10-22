@@ -10,6 +10,7 @@ import {
     PROJECT_FILE_LIMITS
 } from './utils/projectFiles';
 import { createSpeechSession, MIC_STATE } from './utils/speechSession';
+import { readTextFileBounded } from './utils/boundedRead';
 import { createSubmissionGuard } from './utils/submissionGuard';
 
 // ============================================================================
@@ -7329,34 +7330,6 @@ PROJECTS:
 2. Distributed WebRTC Voice Node (Node.js/Socket.io) - Multi-room bidirectional voice channel pipeline with synchronous audio stream buffers.
         `);
     };
-
-    // Read a file as text with a hard size cap and a timeout so an unreadable
-    // file can never leave the UI stuck loading.
-    const readTextFileBounded = (file, maxChars) => new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        const timer = setTimeout(() => {
-            try { reader.abort(); } catch { /* noop */ }
-            reject(new Error('read-timeout'));
-        }, 10000);
-        reader.onload = (e) => {
-            clearTimeout(timer);
-            resolve(String(e.target.result || '').substring(0, maxChars));
-        };
-        reader.onerror = () => {
-            clearTimeout(timer);
-            reject(new Error('read-failed'));
-        };
-        reader.onabort = () => {
-            clearTimeout(timer);
-            reject(new Error('read-aborted'));
-        };
-        try {
-            reader.readAsText(file);
-        } catch (err) {
-            clearTimeout(timer);
-            reject(err);
-        }
-    });
 
     const processUploadedFilesList = async (filesList, { isFolder = false } = {}) => {
         if (attachmentBusyRef.current) {

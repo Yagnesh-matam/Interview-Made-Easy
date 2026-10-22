@@ -224,6 +224,22 @@ test('loading-state cleanup: stop() when idle is a no-op (no stuck states)', () 
     assert.equal(rec.started, false);
 });
 
+test('runaway session auto-stops after maxSessionMs with session-timeout code', async () => {
+    const rec = makeFakeRecognition();
+    const errors = [];
+    const session = createSpeechSession(rec, {
+        maxSessionMs: 25,
+        onError: (code) => errors.push(code)
+    });
+    session.start();
+    assert.equal(session.isListening(), true);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.deepEqual(errors, ['session-timeout']);
+    assert.equal(session.state(), MIC_STATE.IDLE);
+    assert.equal(session.isListening(), false);
+    assert.equal(rec.started, false);
+});
+
 test('destroy() detaches handlers and stops the recognizer', () => {
     const rec = makeFakeRecognition();
     const session = createSpeechSession(rec, SESSION_NO_TIMER);
