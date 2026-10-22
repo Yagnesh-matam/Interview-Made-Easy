@@ -146,8 +146,15 @@ const App = () => {
         ? Math.round((totalCorrectAnswers / totalQuestionsAnswered) * 100) 
         : 0;
 
+    // TEMPORARY: Plans & Pricing is hidden from the user-facing UI while
+    // payments are being built later. This is the single switch that gates
+    // the sidebar item and the page render — flip to true to restore both.
+    // The PricingView component below is preserved untouched for that.
+    const SHOW_PRICING = false;
     const [currentView, setCurrentView] = useState(() => {
-        return sessionStorage.getItem('prepquest_view') || 'home';
+        const saved = sessionStorage.getItem('prepquest_view') || 'home';
+        // Never restore the temporarily-hidden pricing view from a stale session.
+        return saved === 'pricing' && !SHOW_PRICING ? 'home' : saved;
     });
     const isLocked = !user && !isGuest;
     const effectiveView = isLocked ? 'home' : currentView;
@@ -1231,6 +1238,7 @@ const App = () => {
                                     <span>🎙️</span>
                                     <span>Vocal AI Arena</span>
                                 </button>
+                                {SHOW_PRICING && (
                                 <button 
                                     onClick={() => { setCurrentView('pricing'); setSidebarOpen(false); }}
                                     className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all text-left ${
@@ -1244,6 +1252,7 @@ const App = () => {
                                     <span>💎</span>
                                     <span>Plans & Pricing</span>
                                 </button>
+                                )}
                             </nav>
                         </div>
 
@@ -1329,7 +1338,7 @@ const App = () => {
                             />
                         )}
                         {currentView === 'study' && <StudyView theme={theme} />}
-                        {currentView === 'pricing' && <PricingView theme={theme} isSignedIn={Boolean(user)} />}
+                        {currentView === 'pricing' && SHOW_PRICING && <PricingView theme={theme} isSignedIn={Boolean(user)} />}
                         {currentView === 'quiz' && (
                             <QuizEngine 
                                 theme={theme} 
