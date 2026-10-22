@@ -2,6 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import supabase, { isSupabaseConfigured } from './config/supabaseClient';
 import apiClient, { setUnauthorizedHandler } from './config/apiClient';
 import QuizEngine from './components/QuizEngine';
+import {
+    selectProjectFiles,
+    allocateContentBudget,
+    summarizeSkips,
+    buildAttachmentContext,
+    PROJECT_FILE_LIMITS
+} from './utils/projectFiles';
+import { createSpeechSession, MIC_STATE } from './utils/speechSession';
+import { createSubmissionGuard } from './utils/submissionGuard';
 
 // ============================================================================
 // SYSTEM DATA & BLUEPRINTS
@@ -6888,6 +6897,12 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
     
     const [attachedCodeFiles, setAttachedCodeFiles] = useState([]);
     const [codeUploadError, setCodeUploadError] = useState('');
+    const [codeUploadNotice, setCodeUploadNotice] = useState('');
+    const [chatError, setChatError] = useState('');
+    const attachmentBusyRef = useRef(false);
+    // Synchronous duplicate-submission guard (React state is async, so a
+    // double-click could pass the `loading` check twice).
+    const submissionGuardRef = useRef(createSubmissionGuard());
     const [showPasteArea, setShowPasteArea] = useState(false);
     const [pasteFilename, setPasteFilename] = useState('');
     const [pasteCodeContent, setPasteCodeContent] = useState('');
@@ -6907,8 +6922,8 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
         let repoName = url.replace(/^(https?:\/\/)?(www\.)?github\.com\//i, '');
         repoName = repoName.replace(/\/$/, ''); // strip trailing slash
         
-        if (attachedCodeFiles.length >= 5) {
-            setCodeUploadError("Limit of 5 file/repo attachments exceeded.");
+        if (attachedCodeFiles.length >= 10) {
+            setCodeUploadError("Limit of 10 file/repo attachments exceeded.");
             return;
         }
         
@@ -6939,11 +6954,7 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
         e.stopPropagation();
         setCodeDragActive(false);
         if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-            if (e.dataTransfer.files.length + attachedCodeFiles.length > 5) {
-                setCodeUploadError("Limit of 5 files exceeded when attaching separately.");
-                return;
-            }
-            processUploadedFilesList(e.dataTransfer.files);
+            processUploadedFilesList(e.dataTransfer.files, { isFolder: false });
         }
     };
 
@@ -6958,8 +6969,8 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
             path: name,
             content: pasteCodeContent.trim().substring(0, 8000)
         };
-        if (attachedCodeFiles.length >= 5) {
-            setCodeUploadError("Limit of 5 files exceeded.");
+        if (attachedCodeFiles.length >= 10) {
+            setCodeUploadError("Limit of 10 attachments exceeded.");
             return;
         }
         setAttachedCodeFiles(prev => [...prev, newFile]);
@@ -6970,6 +6981,8 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
     };
 
     const recognitionRef = useRef(null);
+    const speechSessionRef = useRef(null);
+    const [micState, setMicState] = useState(MIC_STATE.IDLE);
     const audioRef = useRef(new Audio()); 
     const chatEndRef = useRef(null);
     
@@ -6980,7 +6993,6 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
     const executeTransmissionRef = useRef(null);
     const typingAnimFrameRef = useRef(null);
     const typingIntervalRef = useRef(null);
-    const shouldListenRef = useRef(false);
 
     const COMPANIES_DATA = [
         // Big Tech
@@ -7051,56 +7063,48 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (SpeechRecognition) {
             const rec = new SpeechRecognition();
-            rec.continuous = true;
-            rec.interimResults = true;
-            rec.lang = 'en-US';
-
-            let finalTranscript = '';
-
-            rec.onstart = () => {
-                setIsListening(true);
-                setMicError('');
-                finalTranscript = '';
-            };
-            rec.onend = () => {
-                setIsListening(false);
-                if (shouldListenRef.current) {
-                    try {
-                        rec.start();
-                    } catch (e) {
-                        console.error("Auto-restart mic failed:", e);
-                    }
-                }
-            };
-            rec.onerror = (event) => {
-                // Surface actionable fallback guidance for unsupported browsers / denied permission.
-                if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-                    shouldListenRef.current = false;
-                    setMicError('Microphone access was denied. Allow mic permission in your browser settings, or type your answers below — typing works exactly the same.');
-                } else if (event.error === 'network') {
-                    setMicError('Speech recognition network error. Type your answers below instead.');
-                } else if (event.error === 'audio-capture') {
-                    setMicError('No microphone detected. Type your answers below instead.');
-                }
-            };
-            rec.onresult = (event) => {
-                let interimTranscript = '';
-                for (let i = event.resultIndex; i < event.results.length; ++i) {
-                    if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i][0].transcript + ' ';
-                    } else {
-                        interimTranscript += event.results[i][0].transcript;
-                    }
-                }
-                const currentText = (finalTranscript + interimTranscript).trim();
-                setUserInput(currentText);
-            };
             recognitionRef.current = rec;
+            speechSessionRef.current = createSpeechSession(rec, {
+                // Preserve whatever the user has typed — never overwrite it.
+                initialText: '',
+                restartOnEnd: true,
+                maxSessionMs: 120000,
+                onState: (state) => {
+                    setMicState(state);
+                    setIsListening(state === MIC_STATE.LISTENING);
+                    if (state === MIC_STATE.DENIED) {
+                        setMicError('Microphone access was denied. Allow mic permission in your browser settings, or type your answers below — typing works exactly the same.');
+                    } else if (state === MIC_STATE.ERROR) {
+                        setMicError('Speech recognition failed. Type your answers below instead.');
+                    } else {
+                        setMicError('');
+                    }
+                },
+                onTranscript: (text) => {
+                    setUserInput(text);
+                },
+                onError: (code) => {
+                    if (code === 'denied') {
+                        setMicError('Microphone access was denied. Allow mic permission in your browser settings, or type your answers below — typing works exactly the same.');
+                    } else if (code === 'network') {
+                        setMicError('Speech recognition network error. Type your answers below instead.');
+                    } else if (code === 'no-mic') {
+                        setMicError('No microphone detected. Type your answers below instead.');
+                    } else if (code === 'no-speech') {
+                        setMicError("I didn't catch that. Press the mic and try again, or type your answer.");
+                    } else if (code === 'session-timeout') {
+                        setMicError('Mic session ended after 2 minutes. Press the mic to continue speaking.');
+                    }
+                }
+            });
         } else {
             setSpeechSupported(false);
         }
 
         return () => {
+            if (speechSessionRef.current) {
+                speechSessionRef.current.destroy();
+            }
             if (audioRef.current) {
                 try {
                     audioRef.current.pause();
@@ -7326,97 +7330,179 @@ PROJECTS:
         `);
     };
 
-    const processUploadedFilesList = async (filesList) => {
-        const filesArray = Array.from(filesList);
-        const allowedExtensions = ['js', 'jsx', 'ts', 'tsx', 'py', 'java', 'cpp', 'c', 'html', 'css', 'json', 'md', 'txt', 'sql', 'sh', 'ipynb', 'pdf', 'docx'];
-        
-        const textFiles = filesArray.filter(file => {
-            const ext = file.name.split('.').pop().toLowerCase();
-            return allowedExtensions.includes(ext);
-        });
+    // Read a file as text with a hard size cap and a timeout so an unreadable
+    // file can never leave the UI stuck loading.
+    const readTextFileBounded = (file, maxChars) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        const timer = setTimeout(() => {
+            try { reader.abort(); } catch { /* noop */ }
+            reject(new Error('read-timeout'));
+        }, 10000);
+        reader.onload = (e) => {
+            clearTimeout(timer);
+            resolve(String(e.target.result || '').substring(0, maxChars));
+        };
+        reader.onerror = () => {
+            clearTimeout(timer);
+            reject(new Error('read-failed'));
+        };
+        reader.onabort = () => {
+            clearTimeout(timer);
+            reject(new Error('read-aborted'));
+        };
+        try {
+            reader.readAsText(file);
+        } catch (err) {
+            clearTimeout(timer);
+            reject(err);
+        }
+    });
 
-        if (textFiles.length === 0) {
-            setCodeUploadError("No supported text, code, or resume files found in selection.");
+    const processUploadedFilesList = async (filesList, { isFolder = false } = {}) => {
+        if (attachmentBusyRef.current) {
+            setCodeUploadError('Already processing a previous selection — wait for it to finish.');
             return;
         }
-
-        const resolvedFiles = [];
-        for (const file of textFiles) {
-            const ext = file.name.split('.').pop().toLowerCase();
-            let content = "";
-
-            if (ext === 'pdf' || ext === 'docx') {
-                const formData = new FormData();
-                formData.append('resume', file);
-                try {
-                    setLoading(true);
-                    const response = await apiClient.post('/api/resume/parse', formData, {
-                        headers: { 'Content-Type': 'multipart/form-data' }
-                    });
-                    if (response.data && response.data.extractedText) {
-                        content = response.data.extractedText;
-                    } else {
-                        content = `[Empty or unparseable ${ext.toUpperCase()} file: ${file.name}]`;
-                    }
-                } catch (err) {
-                    console.error("PDF/DOCX parser offline:", err);
-                    content = `[Parser error reading ${file.name}]`;
-                } finally {
-                    setLoading(false);
-                }
-            } else {
-                const fileText = await new Promise((resolve) => {
-                    const reader = new FileReader();
-                    reader.onload = (e) => resolve(e.target.result);
-                    reader.readAsText(file);
-                });
-
-                content = fileText;
-
-                if (ext === 'ipynb') {
-                    try {
-                        const notebook = JSON.parse(fileText);
-                        if (notebook && notebook.cells) {
-                            content = notebook.cells
-                                .map((cell, cIdx) => {
-                                    const type = cell.cell_type;
-                                    const source = Array.isArray(cell.source) ? cell.source.join('') : cell.source || '';
-                                    return `[Cell #${cIdx + 1} - ${type.toUpperCase()}]\n${source}`;
-                                })
-                                .join('\n\n');
-                        }
-                    } catch (parseErr) {
-                        console.warn(`Jupyter Notebook JSON parse failed for ${file.name}.`, parseErr);
-                    }
-                }
+        attachmentBusyRef.current = true;
+        setCodeUploadError('');
+        setCodeUploadNotice('');
+        try {
+            const filesArray = Array.from(filesList || []);
+            if (filesArray.length === 0) {
+                setCodeUploadError('No files found in that selection.');
+                return;
             }
 
-            resolvedFiles.push({
-                name: file.name,
+            const entries = filesArray.map((file) => ({
                 path: file.webkitRelativePath || file.name,
-                content: content.substring(0, 8000)
-            });
-        }
+                size: file.size,
+                file
+            }));
 
-        setAttachedCodeFiles(prev => {
-            const combined = [...prev, ...resolvedFiles];
-            return combined.slice(0, 10);
-        });
-        setCodeUploadError('');
+            const existingPaths = attachedCodeFiles.map((f) => f.path);
+            const { selected, skipped } = selectProjectFiles(entries, { existingPaths });
+
+            if (selected.length === 0) {
+                const detail = skipped.total > 0 ? ` ${summarizeSkips(skipped)}` : '';
+                setCodeUploadError(`No attachable source files found.${detail}`);
+                return;
+            }
+
+            // Map selections back to their File objects (path is unique after dedupe).
+            const fileByPath = new Map(entries.map((e) => [e.path, e.file]));
+            const { fits, droppedForBudget } = allocateContentBudget(selected);
+
+            const resolvedFiles = [];
+            let readFailures = 0;
+            for (const slot of fits) {
+                const file = fileByPath.get(slot.path);
+                if (!file) continue;
+                const ext = slot.name.split('.').pop().toLowerCase();
+                let content = '';
+
+                try {
+                    if ((ext === 'pdf' || ext === 'docx') && !isFolder) {
+                        // Backend parsing is rate-limited; only allow it for
+                        // explicit single-file picks, never bulk folders.
+                        const formData = new FormData();
+                        formData.append('resume', file);
+                        setLoading(true);
+                        try {
+                            const response = await apiClient.post('/api/resume/parse', formData, {
+                                headers: { 'Content-Type': 'multipart/form-data' }
+                            });
+                            content = (response.data && response.data.extractedText) || '';
+                        } finally {
+                            setLoading(false);
+                        }
+                        if (!content) {
+                            readFailures += 1;
+                            continue;
+                        }
+                    } else {
+                        content = await readTextFileBounded(file, slot.chars);
+                        if (ext === 'ipynb') {
+                            try {
+                                const notebook = JSON.parse(content);
+                                if (notebook && notebook.cells) {
+                                    content = notebook.cells
+                                        .map((cell, cIdx) => {
+                                            const type = cell.cell_type;
+                                            const src = Array.isArray(cell.source) ? cell.source.join('') : cell.source || '';
+                                            return `[Cell #${cIdx + 1} - ${type.toUpperCase()}]\n${src}`;
+                                        })
+                                        .join('\n\n');
+                                }
+                            } catch {
+                                // Keep raw JSON if the notebook shape is unexpected.
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.warn(`Skipping unreadable file: ${slot.path}`);
+                    readFailures += 1;
+                    continue;
+                }
+
+                resolvedFiles.push({
+                    name: slot.name,
+                    path: slot.path,
+                    content: String(content).substring(0, slot.chars)
+                });
+            }
+
+            if (resolvedFiles.length === 0) {
+                setCodeUploadError(
+                    readFailures > 0
+                        ? 'Could not read any of the selected files. Try different files.'
+                        : 'No attachable source files found.'
+                );
+                return;
+            }
+
+            setAttachedCodeFiles((prev) => {
+                const seen = new Set(prev.map((f) => String(f.path).toLowerCase()));
+                const combined = [...prev];
+                for (const f of resolvedFiles) {
+                    const key = String(f.path).toLowerCase();
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    if (combined.length >= PROJECT_FILE_LIMITS.maxFiles) break;
+                    combined.push(f);
+                }
+                return combined;
+            });
+
+            const notes = [];
+            if (skipped.total > 0) notes.push(summarizeSkips(skipped));
+            if (droppedForBudget > 0) {
+                notes.push(`${droppedForBudget} more file(s) dropped to stay under the ${PROJECT_FILE_LIMITS.maxTotalChars.toLocaleString()}-character project limit.`);
+            }
+            if (readFailures > 0) notes.push(`${readFailures} file(s) could not be read and were skipped.`);
+            if (notes.length > 0) setCodeUploadNotice(notes.join(' '));
+        } finally {
+            attachmentBusyRef.current = false;
+        }
     };
 
     const handleCodeFilesSelected = (e) => {
         const selected = e.target.files;
-        if (selected.length + attachedCodeFiles.length > 5) {
-            setCodeUploadError("Limit of 5 files exceeded when attaching separately.");
+        // Individual picks keep a strict count guard; folders are filtered by
+        // selectProjectFiles (which enforces the real limits).
+        if (selected.length + attachedCodeFiles.length > 10) {
+            setCodeUploadError('Limit of 10 attachments exceeded when attaching separately.');
+            e.target.value = '';
             return;
         }
-        processUploadedFilesList(selected);
+        processUploadedFilesList(selected, { isFolder: false });
+        e.target.value = '';
     };
 
     const handleCodeFolderSelected = (e) => {
         const selected = e.target.files;
-        processUploadedFilesList(selected);
+        processUploadedFilesList(selected, { isFolder: true });
+        // Allow re-selecting the same folder later.
+        e.target.value = '';
     };
 
     const removeAttachedCodeFile = (idx) => {
@@ -7424,11 +7510,8 @@ PROJECTS:
     };
 
     const handleStart = async () => {
-        shouldListenRef.current = false;
-        if (isListening && recognitionRef.current) {
-            try {
-                recognitionRef.current.stop();
-            } catch (e) {}
+        if (speechSessionRef.current) {
+            speechSessionRef.current.stop({ finalize: false });
         }
         primeAudio();
         setLoading(true);
@@ -7530,8 +7613,11 @@ Core Directives for the AI Interviewer:
     };
 
     const executeTransmission = async (text) => {
-        if (loading) return;
-        
+        // Synchronous duplicate-submission guard: `loading` state updates
+        // asynchronously, so a fast double-click could otherwise send twice.
+        if (loading || !text || !text.trim()) return;
+        if (!submissionGuardRef.current.begin()) return;
+
         // Interrupt ongoing voice/typing
         if (audioRef.current) {
             try {
@@ -7549,29 +7635,25 @@ Core Directives for the AI Interviewer:
         }
         setCurrentlyTypingIndex(-1);
 
-        // Stop microphone recording upon transmission
-        shouldListenRef.current = false;
-        if (isListening && recognitionRef.current) {
-            try {
-                recognitionRef.current.stop();
-            } catch (e) {}
+        // Stop microphone recording upon transmission (no finalize: the
+        // recognized text is already in `text`).
+        if (speechSessionRef.current) {
+            speechSessionRef.current.stop({ finalize: false });
         }
 
         primeAudio();
         setLoading(true);
-
+        setChatError('');
+        setCodeUploadError('');
+        // Attachments are cleared only AFTER a successful response so a
+        // failed request preserves both the message and the selection.
+        // Keep the total message under the backend's 50,000-char validation
+        // limit (the typed text counts toward it too).
+        const contextBudget = Math.max(0, 45000 - text.length);
         let userMessagePayload = text;
-        
-        if (attachedCodeFiles.length > 0) {
-            const filesContext = attachedCodeFiles.map(file => `
-=== FILE: ${file.name} (Path: ${file.path}) ===
-\`\`\`
-${file.content}
-\`\`\`
-            `).join('\n\n');
-
-            userMessagePayload += `\n\n[SYSTEM ENHANCEMENT: User has attached files for review:\n${filesContext}\nAnalyze these files in detail and ask highly specific questions about them (whether code files, documents, or resumes)!]`;
-            setAttachedCodeFiles([]);
+        const attachmentContext = buildAttachmentContext(attachedCodeFiles, contextBudget);
+        if (attachmentContext) {
+            userMessagePayload += `\n\n${attachmentContext}`;
         }
 
         const updatedHistory = [...chatHistory, { role: 'user', content: userMessagePayload }];
@@ -7597,14 +7679,24 @@ ${file.content}
             setTypedText("");
             setCurrentlyTypingIndex(newHistory.length - 1);
             setChatHistory(newHistory);
+            // Attachments were consumed by this successful send.
+            setAttachedCodeFiles([]);
+            setCodeUploadNotice('');
             startTypingEffect(newHistory.length - 1, res.data.reply, res.data.audio);
         } catch (err) {
             console.error("Transmission failed:", err);
+            // Restore the message so the user can retry without retyping.
+            setUserInput(text);
             if (err.response?.status === 401) {
-                setUserInput('⚠️ Your session expired or you are not signed in. Sign in with Google or email to use the Vocal AI Arena.');
+                setChatError('⚠️ Your session expired or you are not signed in. Sign in with Google or email to use the Vocal AI Arena.');
+            } else if (err.response?.status === 429) {
+                setChatError('⚠️ Rate limit reached. Wait a moment, then press Send to retry.');
+            } else {
+                setChatError('⚠️ The request failed. Your message and attachments are preserved — press Send to retry.');
             }
         } finally {
             setLoading(false);
+            submissionGuardRef.current.end();
         }
     };
 
@@ -7698,21 +7790,20 @@ ${file.content}
     };
 
     const toggleVoice = () => {
-        if (!recognitionRef.current || !speechSupported) {
+        const session = speechSessionRef.current;
+        if (!session || !speechSupported) {
             setMicError('Voice input is not supported in this browser (try Chrome or Edge). Type your answers below — the interview works identically.');
             return;
         }
         primeAudio();
-        if (isListening) {
-            shouldListenRef.current = false;
-            recognitionRef.current.stop();
+        if (session.isListening()) {
+            // Finalize the current utterance; recognized text stays editable in
+            // the input box.
+            session.stop({ finalize: true });
         } else {
-            shouldListenRef.current = true;
-            try {
-                recognitionRef.current.start();
-            } catch (e) {
-                console.error("Mic start error:", e);
-            }
+            setMicError('');
+            // Seed with whatever is already typed so it is preserved.
+            session.start(userInput);
         }
     };
 
@@ -8116,6 +8207,7 @@ ${file.content}
                         )}
 
                         {codeUploadError && <p className="text-[9px] font-mono text-rose-500">{codeUploadError}</p>}
+                        {codeUploadNotice && <p className="text-[9px] font-mono text-amber-500/90">{codeUploadNotice}</p>}
 
                         {attachedCodeFiles.length > 0 && (
                             <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
@@ -8145,10 +8237,16 @@ ${file.content}
                         <button type="button" onClick={() => setMicError('')} className="font-bold shrink-0">✕</button>
                     </div>
                 )}
+                {chatError && (
+                    <div className="mb-2 p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-[11px] text-rose-400 flex justify-between items-center gap-3 animate-fadeIn">
+                        <span>{chatError}</span>
+                        <button type="button" onClick={() => setChatError('')} className="font-bold shrink-0">✕</button>
+                    </div>
+                )}
                 <div className="flex gap-3 items-center border-t border-white/5 pt-4">
                     <button 
                         onClick={toggleVoice} 
-                        title={speechSupported ? 'Toggle voice input' : 'Voice input unavailable in this browser — type instead'}
+                        title={speechSupported ? (micState === MIC_STATE.LISTENING ? 'Stop listening' : 'Start voice input') : 'Voice input unavailable in this browser — type instead'}
                         className={`p-3 rounded-xl border text-sm transition-all duration-200 ${!speechSupported ? 'bg-black border-white/5 text-slate-600 cursor-not-allowed' : (isListening ? 'bg-rose-500 border-rose-500 text-white animate-pulse cursor-pointer' : 'bg-black border-white/5 text-slate-400 hover:text-slate-200 cursor-pointer')}`}
                     >
                         {isListening ? '🛑' : (speechSupported ? '🎙️' : '⌨️')}
@@ -8163,14 +8261,21 @@ ${file.content}
                                 executeTransmission(userInput); 
                             } 
                         }}
-                        placeholder={isListening ? "🎙️ Mic Active: Speak clearly now... Press Mic icon to pause or Send to transmit." : (attachedCodeFiles.length > 0 ? "Press Send to analyze attached files..." : "Type response code, paste resume, or speech...")} 
+                        placeholder={
+                            micState === MIC_STATE.LISTENING
+                                ? "🎙️ Listening… interim words appear as you speak. Press Send to submit."
+                                : micState === MIC_STATE.PROCESSING
+                                    ? "🎙️ Finalizing your words…"
+                                    : (attachedCodeFiles.length > 0 ? "Press Send to analyze attached files..." : "Type response code, paste resume, or speech...")
+                        } 
                         className={`flex-1 p-3 border rounded-xl text-xs outline-none transition-all resize-none max-h-32 overflow-y-auto ${theme === 'dark' ? 'bg-black border-white/5 text-white focus:border-cyan-500/40' : 'bg-slate-50 border-slate-200 text-slate-800 focus:border-cyan-500/40'}`}
                     />
                     <button 
                         onClick={() => executeTransmission(userInput)}
-                        className="px-5 py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs rounded-xl transition-all cursor-pointer shadow-sm"
+                        disabled={loading || !userInput.trim()}
+                        className={`px-5 py-3 text-xs rounded-xl transition-all font-bold ${loading || !userInput.trim() ? 'bg-slate-600 text-slate-400 cursor-not-allowed' : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 cursor-pointer shadow-sm'}`}
                     >
-                        {attachedCodeFiles.length > 0 ? "Analyze & Send" : "Send"}
+                        {loading ? 'Sending…' : (attachedCodeFiles.length > 0 ? "Analyze & Send" : "Send")}
                     </button>
                 </div>
             </div>
