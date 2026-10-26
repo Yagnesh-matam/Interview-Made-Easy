@@ -2292,8 +2292,32 @@ const DashboardView = ({ onNavigate, theme, totalQuizzesTaken, totalInterviewsDo
                                     <ul className="space-y-2">
                                         {interviewHistory.map(s => (
                                             <li key={s.id} className={`flex justify-between items-center text-xs py-1.5 border-b last:border-0 ${theme === 'dark' ? 'border-white/5 text-slate-300' : 'border-slate-100 text-slate-600'}`}>
-                                                <span className="font-bold capitalize">{s.mode}{s.company ? ` · ${s.company}` : (s.topic ? ` · ${String(s.topic).substring(0, 20)}` : '')}</span>
-                                                <span className="font-mono">{s.turns} turns · {formatDate(s.created_at)}</span>
+                                                <div className="flex flex-col">
+                                                    <span className="font-bold capitalize">{s.mode}{s.company ? ` · ${s.company}` : (s.topic ? ` · ${String(s.topic).substring(0, 40)}` : '')}</span>
+                                                    <span className="font-mono text-[10px] opacity-70">{s.turns} turns · {formatDate(s.created_at)}</span>
+                                                </div>
+                                                <button
+                                                    onClick={() => {
+                                                        try {
+                                                            sessionStorage.setItem('prepquest_resume_session', JSON.stringify({
+                                                                id: s.id,
+                                                                mode: s.mode,
+                                                                company: s.company || null,
+                                                                topic: s.topic || null,
+                                                                turns: s.turns,
+                                                                report: s.report || ''
+                                                            }));
+                                                        } catch (e) {
+                                                            console.warn('Failed to cache resume session', e);
+                                                        }
+                                                        if (typeof onNavigate === 'function') {
+                                                            onNavigate('interview');
+                                                        }
+                                                    }}
+                                                    className={`ml-2 px-2 py-1 rounded-lg text-[10px] font-bold ${theme === 'dark' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20' : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'}`}
+                                                >
+                                                    Resume
+                                                </button>
                                             </li>
                                         ))}
                                     </ul>
@@ -6921,6 +6945,36 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
     // GitHub link states
     const [githubUrlInput, setGithubUrlInput] = useState('');
     const [showGithubInput, setShowGithubInput] = useState(false);
+    const [resumedSessionId, setResumedSessionId] = useState(null);
+
+    // Load a saved interview session for resumption
+    useEffect(() => {
+        try {
+            const raw = sessionStorage.getItem('prepquest_resume_session');
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+            if (!saved) return;
+            setResumedSessionId(saved.id || null);
+            if (saved.mode) {
+                setMode(saved.mode);
+                if (saved.mode === 'company' && saved.company) {
+                    setCompany(saved.company);
+                }
+                if (saved.topic) {
+                    setTopic(saved.topic);
+                }
+            }
+            // Try to restore a minimal history hint from report if available
+            if (saved.report && typeof saved.report === 'string') {
+                // Keep report for context; actual full history may not be stored
+                setReportContent(saved.report);
+            }
+            sessionStorage.removeItem('prepquest_resume_session');
+        } catch (e) {
+            console.warn('Failed to load resume session', e);
+            try { sessionStorage.removeItem('prepquest_resume_session'); } catch (_) {}
+        }
+    }, []);
 
 
 
