@@ -7316,35 +7316,75 @@ const AiChatConsoleView = ({ theme, voice, setTotalInterviewsDone, user, syncAll
     const handleResumeFile = async (file) => {
         if (!file) return;
 
+        // Basic validation
+        const maxSizeBytes = 5 * 1024 * 1024; // 5MB
+        if (file.size > maxSizeBytes) {
+            setResumeFileName(file.name);
+            setResumeText("");
+            setCodeUploadError("File too large (max 5MB). Please compress or use a smaller resume.");
+            return;
+        }
+
         setResumeFileName(file.name);
         setCodeUploadError('');
         
-        if (file.type === "text/plain" || file.name.endsWith('.txt')) {
+        if (file.type === "text/plain" || file.name.toLowerCase().endsWith('.txt')) {
+            setLoading(true);
             const reader = new FileReader();
             reader.onload = (event) => {
-                setResumeText(event.target.result.substring(0, 15000));
+                try {
+                    const text = (event.target.result || '').toString();
+                    if (!text.trim()) {
+                        setResumeText("");
+                        setCodeUploadError("This text file appears to be empty.");
+                    } else {
+                        setResumeText(text.substring(0, 15000));
+                        setCodeUploadError('');
+                    }
+                } catch (e) {
+                    setResumeText("");
+                    setCodeUploadError("Failed to read text file.");
+                } finally {
+                    setLoading(false);
+                }
             };
-            reader.readAsText(file);
+            reader.onerror = () => {
+                setResumeText("");
+                setCodeUploadError("Failed to read text file.");
+                setLoading(false);
+            };
+            try {
+                reader.readAsText(file);
+            } catch (e) {
+                setResumeText("");
+                setCodeUploadError("Failed to read text file.");
+                setLoading(false);
+            }
         } else {
             const formData = new FormData();
             formData.append('resume', file);
             try {
                 setLoading(true);
                 const response = await apiClient.post('/api/resume/parse', formData, {
-                    headers: { 'Content-Type': 'multipart/form-data' }
+                    headers: { 'Content-Type': 'multipart/form-data' },
+                    timeout: 60000
                 });
-                if (response.data && response.data.extractedText) {
+                if (response.data && response.data.extractedText && response.data.extractedText.trim()) {
                     setResumeText(response.data.extractedText.substring(0, 15000));
                     setCodeUploadError('');
                 } else {
                     setResumeText("");
-                    setCodeUploadError("Unable to extract text from this document. Please use a .txt file or paste your resume text directly below.");
+                    setCodeUploadError("Unable to extract text from this document. The file may be scanned, empty, or unsupported. Please try a different format or paste your resume text directly.");
                 }
             } catch (err) {
                 console.error("Express Resume Parser error:", err);
                 setResumeText(""); 
                 const backendError = err.response?.data?.error;
-                setCodeUploadError(backendError || "Backend PDF parser error. Please start your backend server, upload a .txt file, or paste your resume text directly below.");
+                if (err.code === 'ECONNABORTED') {
+                    setCodeUploadError("Resume parsing timed out. The file may be large or the server is slow. Please try again or paste your resume text directly.");
+                } else {
+                    setCodeUploadError(backendError || "Backend resume parser error. Please try again, upload a .txt file, or paste your resume text directly below.");
+                }
             } finally {
                 setLoading(false);
             }

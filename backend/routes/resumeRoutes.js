@@ -55,24 +55,36 @@ router.post('/parse', (req, res, next) => {
         }
 
         let cleanText = '';
-        if (isPDF) {
-            // Parse PDF content using the highly reliable pdf-parse engine
-            const data = await pdfParse(req.file.buffer);
-            cleanText = data.text.trim();
-        } else if (isDOCX) {
-            // Parse DOCX content using mammoth
-            const result = await mammoth.extractRawText({ buffer: req.file.buffer });
-            cleanText = result.value.trim();
+        try {
+            if (isPDF) {
+                // Parse PDF content using the highly reliable pdf-parse engine with a timeout guard
+                const parsePromise = pdfParse(req.file.buffer);
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('PDF_PARSE_TIMEOUT')), 15000));
+                const data = await Promise.race([parsePromise, timeoutPromise]);
+                cleanText = (data && data.text ? data.text : '').trim();
+            } else if (isDOCX) {
+                // Parse DOCX content using mammoth with a timeout guard
+                const parsePromise = mammoth.extractRawText({ buffer: req.file.buffer });
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('DOCX_PARSE_TIMEOUT')), 15000));
+                const result = await Promise.race([parsePromise, timeoutPromise]);
+                cleanText = (result && result.value ? result.value : '').trim();
+            }
+        } catch (parseErr) {
+            console.error("Resume parsing timeout/error:", parseErr.message);
+            if (parseErr.message === 'PDF_PARSE_TIMEOUT' || parseErr.message === 'DOCX_PARSE_TIMEOUT') {
+                return res.status(408).json({ error: "Resume parsing timed out. Please try a smaller file or paste the text directly." });
+            }
+            return res.status(400).json({ error: "Failed to extract text from this document. Please try a different format or paste the text directly." });
         }
 
         if (!cleanText) {
             return res.status(400).json({ error: "No extractable text content found in this document. Please check if the file is scanned or empty." });
         }
 
-        // Return clean extracted text to client
+        // Return clean extracted text to client (bounded)
         return res.json({ 
             message: "Resume parsed successfully!", 
-            extractedText: cleanText.substring(0, 30000) 
+            extractedText: cleanText.substring(0, 15000) 
         });
 
     } catch (error) {
