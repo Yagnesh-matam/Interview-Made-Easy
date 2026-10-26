@@ -21,7 +21,7 @@ const WebSocket = require('ws');
 const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const CHROMIUM_MAJOR_VERSION = '143';
 const CHROMIUM_FULL_VERSION = '143.0.3650.75';
-const SEC_MS_GEC_VERSION = `1-${CHROMIUM_FULL_VERSION}`;
+const SEC_MS_GEC_VERSION = `2-${CHROMIUM_FULL_VERSION}`;
 const WIN_EPOCH = 11644473600;
 const S_TO_NS = 1e9;
 
@@ -42,7 +42,7 @@ const generateSecMsGec = (unixSeconds = Date.now() / 1000 + clockSkewSeconds) =>
     ticks += WIN_EPOCH;
     ticks -= ticks % 300;
     ticks *= S_TO_NS / 100;
-    const strToHash = `${ticks.toFixed(0)}${TRUSTED_CLIENT_TOKEN}`;
+    const strToHash = `${ticks.toFixed(0)}${CHROMIUM_MAJOR_VERSION}${TRUSTED_CLIENT_TOKEN}`;
     return crypto.createHash('sha256').update(strToHash, 'ascii').digest('hex').toUpperCase();
 };
 
