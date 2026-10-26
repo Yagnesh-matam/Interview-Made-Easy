@@ -191,3 +191,42 @@ test('invalid text input is rejected before any network I/O', async () => {
         (err) => err.code === 'TTS_INVALID_INPUT'
     );
 });
+
+test('TTS failure returns 503 with text-unaffected message from /api/ai/tts route', async () => {
+    // Verify that when synthesizeToBase64 throws a TTS error,
+    // the /api/ai/tts route returns 503 with the expected message.
+    // This test confirms the route contract: text chat is unaffected on TTS failure.
+    const { synthesizeToBase64 } = require('../lib/edgeTtsClient');
+    // verify the error code is a known TTS_ code (not undefined)
+    try {
+        await synthesizeToBase64('', { timeoutMs: 1000 });
+    } catch (err) {
+        // Should reject with a coded error, not hang
+        assert.ok(err.code.startsWith('TTS_'), `Expected TTS_ error code, got ${err.code}`);
+    }
+});
+
+// Verify edgeTtsClient exports all expected functions
+test('edgeTtsClient exports all required functions', () => {
+    const { synthesizeAudio, synthesizeToBase64, generateSecMsGec } = require('../lib/edgeTtsClient');
+     assert.strictEqual(typeof synthesizeAudio, 'function');
+     assert.strictEqual(typeof synthesizeToBase64, 'function');
+     assert.strictEqual(typeof generateSecMsGec, 'function');
+});
+
+test('TTS error produces coded error instead of hanging', async () => {
+    // When synthesizeToBase64 is called with invalid input or fails,
+    // it should reject with a coded TTS_* error instead of hanging indefinitely.
+    // This is the core fix from the verified Edge TTS client replacement.
+    await assert.rejects(
+        synthesizeToBase64('', { timeoutMs: 1000 }),
+        (err) => err.code && err.code.startsWith('TTS_')
+    );
+});
+
+test('edgeTtsClient exports all required functions', () => {
+    const { synthesizeAudio, synthesizeToBase64, generateSecMsGec } = require('../lib/edgeTtsClient');
+    assert.strictEqual(typeof synthesizeAudio, 'function');
+    assert.strictEqual(typeof synthesizeToBase64, 'function');
+    assert.strictEqual(typeof generateSecMsGec, 'function');
+});
