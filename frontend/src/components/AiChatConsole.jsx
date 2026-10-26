@@ -134,20 +134,29 @@ const AiChatConsole = () => {
 
             const replyText = response.data.reply;
             setChatHistory([...updatedHistory, { role: 'assistant', content: replyText }]);
-            setLoading(false);
+            
+            // Handle audio playback - text first, then TTS in background
             if (response.data.audio) {
                 playNeuralAudioStream(response.data.audio);
-            } else if (replyText) {
-                try {
-                    const ttsRes = await apiClient.post('/api/ai/tts', { text: replyText });
-                    if (ttsRes.data?.audio) {
-                        playNeuralAudioStream(ttsRes.data.audio);
-                    }
-                } catch (ttsErr) {
-                    console.error("TTS fetch failed");
-                    showNotification("Voice unavailable for this response.", "info");
-                }
             }
+            
+            // Always attempt TTS in background without blocking text display
+            if (replyText) {
+                // Don't await TTS - let it run in background while user can already read response
+                apiClient.post('/api/ai/tts', { text: replyText })
+                    .then(ttsRes => {
+                        if (ttsRes.data?.audio) {
+                            playNeuralAudioStream(ttsRes.data.audio);
+                        }
+                    })
+                    .catch(ttsErr => {
+                        // TTS failure doesn't affect text response visibility
+                        console.error("TTS fetch failed", ttsErr);
+                        showNotification("Voice unavailable for this response.", "info");
+                    });
+            }
+            
+            setLoading(false);
         } catch (error) {
             console.error("Network transmission error");
             showNotification("Failed to get response from Zephyr. Please retry.", "error");
